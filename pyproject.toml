@@ -1,0 +1,14 @@
+[project]
+name = "ai-seal-tools"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.97.0",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.409",
+    "ruff>=0.15.12",
+]
