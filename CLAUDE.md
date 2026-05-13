@@ -52,6 +52,14 @@ skills/<name>/
 
 Reference the [Claude Code skills documentation](https://docs.anthropic.com/en/docs/claude-code/skills) for the SKILL.md format.
 
+After adding a new skill (or pulling new ones from git), register them globally:
+
+```bash
+uv run utils/install_skills.py
+```
+
+This symlinks each `skills/<name>/` into `~/.claude/skills/<name>/` so it's invocable as `/<name>` in any session, and writes a gitignored `.skill-env` into each skill recording the path to this repo's `.venv/bin/python`. Helper scripts a skill calls out to should read `.skill-env` from the skill directory rather than relying on `$PATH`, so they run under the right interpreter no matter where the skill is invoked from.
+
 ## Claude API Patterns
 
 Always use these defaults when writing new Claude API code in this repo:
@@ -68,6 +76,16 @@ system = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "eph
 MODEL = "claude-sonnet-4-6"   # fast + capable
 # MODEL = "claude-opus-4-7"   # when deep reasoning matters
 ```
+
+## Web Browsing (Playwright MCP)
+
+The Playwright MCP server is registered in `.mcp.json` and exposes `browser_*` tools (navigate, snapshot, click, type, screenshot, etc.) to any Claude Code session in this repo.
+
+**Default pattern:** snapshot-driven. Take an a11y snapshot, act on refs, re-snapshot after state changes. Cheap and works for most sites.
+
+**Fallback pattern:** vision-driven. When the snapshot loop fails (canvas apps, unlabeled custom controls, bot-blocked pages, ambiguous refs), switch to `browser_take_screenshot` and reason about the page visually — click by coordinate or drive via keyboard.
+
+When building a new agent or skill that needs browser access, paste `prompts/browsing.md` into its system prompt so it inherits the primary-vs-fallback discipline.
 
 ## Running Things
 

@@ -216,3 +216,43 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node.js / MCP server development
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn-integrity
+.yarn/cache
+.yarn/install-state.gz
+.pnp.*
+
+# TypeScript build artifacts (MCP servers are typically TS → dist/)
+*.tsbuildinfo
+.tsbuildinfo
+
+# Bundlers / frameworks occasionally pulled in by MCP demos
+.next/
+.nuxt/
+.turbo/
+.vite/
+.parcel-cache/
+
+# Per-environment env files (keep .env.example committed if you add one)
+.env.local
+.env.*.local
+
+# Per-machine skill env (written by utils/install_skills.py)
+skills/*/.skill-env
+
+# Claude Code
+#   .claude/settings.json is shared (commit it); settings.local.json is per-machine.
+#   CLAUDE.local.md is for personal notes layered on top of the shared CLAUDE.md.
+.claude/settings.local.json
+.claude/.credentials.json
+CLAUDE.local.md
+
+# Playwright MCP — accessibility snapshots dumped per browsing session
+.playwright-mcp/
