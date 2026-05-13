@@ -28,7 +28,7 @@ Skills under `skills/` need to be registered with Claude Code before they're inv
 uv run utils/install_skills.py
 ```
 
-This symlinks each `skills/<name>/` into `~/.claude/skills/<name>/` and writes a `.skill-env` into each skill recording the active Python/Node/npx paths so helper scripts run under the right interpreters. It also re-pins any `npx`-launched MCP servers in `.mcp.json` to absolute node paths so they don't break when nvm switches versions.
+This symlinks each `skills/<name>/` into `~/.claude/skills/<name>/` and writes a `.skill-env` into each skill recording the active Python/Node/npx paths so helper scripts run under the right interpreters. It also pins any `npx`-launched MCP servers in `.mcp.json` to the captured node version by injecting it onto the server's `env.PATH` — keeping `command`/`args` untouched so MDM allowlist matching still works on managed machines.
 
 Re-run after pulling new skills, after `nvm use <ver>`, or after recreating `.venv`.
 

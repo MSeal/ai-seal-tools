@@ -14,10 +14,11 @@ Helper scripts a skill calls out to should read .skill-env rather than relying
 on $PATH, so they run under the same interpreters the install was wired up for.
 
 If a .mcp.json exists at the repo root, any MCP server with `command: "npx"` is
-also rewritten in-place to launch via the captured absolute node + npx paths.
-That keeps the MCP servers from breaking when Claude Code is launched from a
-shell with a different nvm default selected. Re-run after `nvm use <ver>` to
-re-pin to a different node.
+pinned to the captured node version by prepending the node's bin directory to
+the server's `env.PATH`. This defeats nvm version drift between shells without
+rewriting `command`/`args` — Confluent's MDM allowlist gates MCP loading on a
+literal match of those fields, so rewrites silently break loading on managed
+machines. Re-run after `nvm use <ver>` to re-pin to a different node.
 
 Usage:
     uv run utils/install_skills.py              # install or update all
@@ -131,41 +132,37 @@ def write_skill_env(src: Path, runtimes: dict[str, str], dry: bool) -> str:
 
 
 def pin_mcp_json(mcp_file: Path, runtimes: dict[str, str], dry: bool) -> str:
-    """Rewrite npx-launched MCP servers to run under the captured node/npx.
+    """Pin npx-launched MCP servers to the captured node via env.PATH.
 
-    This avoids the MCP server inheriting whatever node version was active in
-    the shell that launched Claude Code (which on this machine often defaults
-    to an old nvm version that lacks newer JS features).
+    Confluent's MDM allowlist gates MCP loading on a literal match of
+    `command` + `args` against the managed plist (see CLAUDE memory entry
+    `mdm-mcp-allowlist`). Rewriting `command: "npx"` to an absolute node path
+    makes the server fail to load silently. Instead, leave `command`/`args`
+    untouched and prepend the captured node's bin directory onto the server's
+    `env.PATH` — MDM doesn't validate env, so this safely defeats nvm version
+    drift between the shell that launched Claude Code and the one used here.
     """
     if not mcp_file.exists():
         return "skip (no .mcp.json)"
     node = runtimes.get("NODE")
-    npx = runtimes.get("NPX")
-    if not node or not npx:
-        return "skip (node or npx not on PATH)"
+    if not node:
+        return "skip (node not on PATH)"
+    node_bin = str(Path(node).parent)
 
     data = json.loads(mcp_file.read_text())
     changed = False
     for server in data.get("mcpServers", {}).values():
-        cmd = server.get("command", "")
-        args = list(server.get("args", []))
-
-        # Detect prior pinning so we can re-pin to the current runtimes.
-        previously_pinned = (
-            cmd.endswith("/node") or cmd.endswith("\\node.exe")
-        ) and args and (args[0].endswith("/npx") or args[0].endswith("\\npx"))
-
-        if cmd == "npx" or cmd.endswith("/npx"):
-            new_args = [npx, *args]
-        elif previously_pinned:
-            new_args = [npx, *args[1:]]
-        else:
+        if server.get("command") != "npx":
             continue
-
-        if server.get("command") != node or server.get("args") != new_args:
-            server["command"] = node
-            server["args"] = new_args
-            changed = True
+        env = dict(server.get("env", {}))
+        existing = env.get("PATH", os.environ.get("PATH", ""))
+        parts = [p for p in existing.split(os.pathsep) if p and p != node_bin]
+        new_path = os.pathsep.join([node_bin, *parts])
+        if env.get("PATH") == new_path:
+            continue
+        env["PATH"] = new_path
+        server["env"] = env
+        changed = True
 
     if not changed:
         return "ok"
