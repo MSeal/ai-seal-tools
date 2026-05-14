@@ -84,7 +84,7 @@ used in project N" message.
   External
 - **App name**: anything (`find-meeting-time` is fine)
 - **Support email**: your `@example.com`
-- **Scopes**: add `.../auth/calendar.freebusy` (search "freebusy")
+- **Scopes**: add `.../auth/calendar.events.readonly` (search "events.readonly"). The narrower `calendar.freebusy` is *not* sufficient with the current helper — it doesn't surface event titles, which the movability classifier needs. If you previously set up the consent screen with `calendar.freebusy`, edit it and add `calendar.events.readonly` too; then delete `~/.config/ai-seal-tools/google_token.json` so the next run redoes consent with the new scope.
 - **Test users** (if External): add your own email
 
 If the Workspace admin policy requires app verification for external apps
@@ -211,6 +211,20 @@ Each entry: symptom → diagnosis → fix.
   ```
   Re-run the helper. The script falls through to the InstalledAppFlow path
   and opens a fresh browser consent.
+
+### `RefreshError: invalid_scope: Bad Request`
+
+- **Diagnosis**: the cached token was issued with a narrower scope than the
+  helper now requests (e.g., the helper was upgraded from
+  `calendar.freebusy` to `calendar.events.readonly`). The helper's
+  scope-mismatch detector should catch this automatically and unlink the
+  token, but if you see this error directly:
+- **Fix**:
+  1. Ensure the new scope is added to the OAuth consent screen in
+     `console.cloud.google.com` (APIs & Services → OAuth consent screen →
+     Edit App → Scopes → add `.../auth/calendar.events.readonly`).
+  2. `rm ~/.config/ai-seal-tools/google_token.json`
+  3. Re-run the helper. Browser pops with the new scope, you re-consent.
 
 ### `your application is authenticating by using local Application Default Credentials. The calendar-json.googleapis.com API requires a quota project`
 

@@ -6,36 +6,33 @@
 #   "google-auth-oauthlib>=1.4",
 # ]
 # ///
-"""freebusy.py — query Google Calendar free/busy for a set of attendees.
+"""freebusy.py — query Google Calendar availability for a set of attendees,
+classify conflicts, and emit ranked candidate slots with ask-context.
 
-Outputs structured JSON the find-meeting-time skill can rank. Three auth paths,
-tried in order:
+Outputs structured JSON the find-meeting-time skill consumes. Uses
+events.list (not freebusy.query) so we get event summaries and attendees
+where the calendar sharing permits — needed for movability classification.
 
-  1. Service account with domain-wide delegation — preferred for cross-user
-     queries. Save the SA JSON at ~/.config/ai-seal-tools/google_service_account.json
-     and pass --impersonate <your-email> so the SA acts as you (with consent
-     from the user being impersonated implied by DWD setup). Solves the
-     quota-project requirement and avoids per-user consent. See SETUP.md for
-     the IT-request payload.
+Auth paths tried in order:
+  1. Service account at ~/.config/ai-seal-tools/google_service_account.json
+     (+ --impersonate <email> for DWD)
+  2. Cached InstalledAppFlow token at ~/.config/ai-seal-tools/google_token.json
+  3. Fresh OAuth Desktop client flow from
+     ~/.config/ai-seal-tools/google_oauth_client.json
+  4. ADC fallback (usually blocked by quota-project requirement)
 
-  2. Application Default Credentials (gcloud) — runs against gcloud's trusted
-     OAuth client. Run once:
-         gcloud auth application-default login \\
-             --scopes=https://www.googleapis.com/auth/cloud-platform,\\
-                     https://www.googleapis.com/auth/calendar.freebusy
-     Requires a quota project the user has serviceusage.services.use on.
-
-  3. Cached InstalledAppFlow token — used when an OAuth Desktop client is
-     provisioned at ~/.config/ai-seal-tools/google_oauth_client.json.
-     Token cached at ~/.config/ai-seal-tools/google_token.json.
+See SETUP.md for credential setup. Scope is calendar.events.readonly — when
+upgrading from an older calendar.freebusy-only token, delete
+~/.config/ai-seal-tools/google_token.json and re-run to redo consent.
 
 Usage:
   uv run freebusy.py \\
       --emails a@example.com,b@example.com \\
-      --start 2026-05-13T09:00 \\
-      --end   2026-05-16T17:00 \\
+      --start 2026-05-14T09:00 \\
+      --end   2026-05-22T17:00 \\
       --duration 60 \\
-      [--impersonate mseal@confluent.io]
+      [--impersonate mseal@confluent.io] \\
+      [--top 5]
 """
 
 from __future__ import annotations
@@ -43,6 +40,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -53,16 +51,20 @@ from google.oauth2.credentials import Credentials
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.freebusy"]
+SCOPES = ["https://www.googleapis.com/auth/calendar.events.readonly"]
 CONFIG_DIR = Path.home() / ".config" / "ai-seal-tools"
 SERVICE_ACCOUNT = CONFIG_DIR / "google_service_account.json"
 CLIENT_SECRETS = CONFIG_DIR / "google_oauth_client.json"
 TOKEN_FILE = CONFIG_DIR / "google_token.json"
 
 
+# ----------------------------------------------------------------------------
+# Auth
+# ----------------------------------------------------------------------------
+
 def get_credentials(impersonate: str | None = None):
-    # Path 1: service account with optional domain-wide delegation (best)
     if SERVICE_ACCOUNT.exists():
         sa = ServiceAccountCredentials.from_service_account_file(
             str(SERVICE_ACCOUNT), scopes=SCOPES
@@ -71,17 +73,27 @@ def get_credentials(impersonate: str | None = None):
             sa = sa.with_subject(impersonate)
         return sa
 
-    # Path 2: cached InstalledAppFlow token
     if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
-        if creds.valid:
-            return creds
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            TOKEN_FILE.write_text(creds.to_json())
-            return creds
+        # Inspect granted scopes from the stored JSON (creds.scopes after load
+        # reflects what we *requested*, not what the token was issued with).
+        granted = set(json.loads(TOKEN_FILE.read_text()).get("scopes", []))
+        missing = set(SCOPES) - granted
+        if missing:
+            print(
+                f"[freebusy.py] cached token is missing required scopes "
+                f"({missing}); redoing consent.",
+                file=sys.stderr,
+            )
+            TOKEN_FILE.unlink()
+        else:
+            creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+            if creds.valid:
+                return creds
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                TOKEN_FILE.write_text(creds.to_json())
+                return creds
 
-    # Path 3: fresh InstalledAppFlow (provisioned OAuth client; opens browser)
     if CLIENT_SECRETS.exists():
         flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS), SCOPES)
         creds = flow.run_local_server(port=0)
@@ -89,7 +101,6 @@ def get_credentials(impersonate: str | None = None):
         TOKEN_FILE.write_text(creds.to_json())
         return creds
 
-    # Path 4: ADC (last resort — typically blocked by quota-project requirement)
     adc_error: str | None = None
     try:
         creds, _ = adc_default(scopes=SCOPES)
@@ -108,20 +119,254 @@ def get_credentials(impersonate: str | None = None):
     )
 
 
+# ----------------------------------------------------------------------------
+# Event fetch
+# ----------------------------------------------------------------------------
+
+def fetch_events(service, email: str, start: dt.datetime, end: dt.datetime) -> tuple[list[dict], str | None]:
+    """Fetch events on a calendar. Returns (events, error_msg).
+
+    If the calendar is unreadable (403), returns ([], reason). All events,
+    including ones whose details aren't visible to the caller (Workspace's
+    "free/busy only" sharing), come back with whatever fields Google exposes
+    — typically start/end always, summary only when sharing permits.
+    """
+    events: list[dict] = []
+    page_token: str | None = None
+    while True:
+        try:
+            result = service.events().list(
+                calendarId=email,
+                timeMin=start.isoformat(),
+                timeMax=end.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+                pageToken=page_token,
+                maxResults=2500,
+            ).execute()
+        except HttpError as e:
+            return [], f"HTTP {e.resp.status}: {e.error_details if hasattr(e, 'error_details') else e}"
+        events.extend(result.get("items", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            return events, None
+
+
+def parse_event_time(event: dict, key: str) -> dt.datetime | None:
+    """Parse start/end from an event. Handles dateTime, date (all-day), and missing."""
+    t = event.get(key, {})
+    if dt_str := t.get("dateTime"):
+        return dt.datetime.fromisoformat(dt_str)
+    if date_str := t.get("date"):
+        # All-day events: treat as [00:00, 24:00) local on that date
+        d = dt.date.fromisoformat(date_str)
+        is_end = key == "end"
+        return dt.datetime.combine(d, dt.time(0, 0)).astimezone()
+    return None
+
+
+# ----------------------------------------------------------------------------
+# Movability classifier
+# ----------------------------------------------------------------------------
+
+# (regex pattern, category, movability 0-10). First match wins, so order
+# matters: put strong-signal "don't move this" rules before broader patterns
+# that might also match the same title (e.g. "OOO Travel" → ooo, not travel).
+TITLE_RULES: list[tuple[re.Pattern[str], str, int]] = [
+    # OOO / immovable — match first so "OOO Travel to NYC" categorizes as ooo
+    # not travel. "DNS" / "DNB" are Confluent conventions for "Do Not Schedule".
+    (re.compile(r"\b(ooo|out\s*of\s*office|pto|vacation|holiday|sick|appt|appointment|doctor|dentist|dns|dnb|do\s*not\s*(schedule|book))\b", re.I), "ooo", 0),
+    # High-stakes internal — also strong "don't move" signal
+    (re.compile(r"\b(interview|phone\s*screen|onsite|hiring|loop)\b", re.I), "interview", 1),
+    (re.compile(r"\b(all[\s\-]*hands|town\s*hall|company\s*meeting)\b", re.I), "all_hands", 1),
+    (re.compile(r"\b(exec|leadership|board|qbr)\b", re.I), "exec_sync", 2),
+    # External / customer — harder to move than internal meetings
+    (re.compile(r"\b(customer|client|external|prospect|vendor|partner)\b", re.I), "customer_meeting", 2),
+    (re.compile(r"\b(demo|sales|onboarding)\b", re.I), "customer_meeting", 3),
+    # Highly movable personal time blocks
+    (re.compile(r"\b(focus|deep\s*work|heads?\s*down|dnd|no\s*meetings?)\b", re.I), "focus_block", 10),
+    (re.compile(r"\b(hold|placeholder|tentative|optional|block)\b", re.I), "personal_hold", 9),
+    (re.compile(r"\b(travel|commute|wfh|working\s*location)\b", re.I), "travel_block", 7),
+    # Personal events
+    (re.compile(r"\b(lunch|coffee|breakfast|dinner)\b", re.I), "meal", 6),
+    (re.compile(r"\b(workout|gym|run|yoga)\b", re.I), "personal", 6),
+    # 1:1s — recurring 1:1s are typically the easiest real meeting to shift.
+    (re.compile(r"\b(1\s*[:\-/x]\s*1|1on1|one\s*on\s*one)\b", re.I), "one_on_one", 8),
+    (re.compile(r"^\s*[\w.+-]+\s*[/<>&]\s*[\w.+-]+\s*$", re.I), "one_on_one", 8),  # "alice/bob" pattern
+    # Recurring team meetings
+    (re.compile(r"\b(standup|stand\-up|daily\s*sync|scrum)\b", re.I), "team_standup", 5),
+    (re.compile(r"\b(team\s*sync|team\s*meeting|weekly|sync|sprint|retro|grooming|planning|review)\b", re.I), "team_meeting", 5),
+]
+
+
+def classify_event(event: dict) -> dict:
+    """Return {category, movability, recurring, visible, summary, attendee_count}."""
+    summary = event.get("summary")
+    visible = summary is not None
+    event_type = event.get("eventType", "default")
+    status = event.get("status", "confirmed")
+    transparency = event.get("transparency", "opaque")
+    attendees = event.get("attendees", [])
+    recurring = event.get("recurringEventId") is not None
+    is_all_day = "date" in event.get("start", {})
+
+    # eventType signals take priority over title parsing
+    if event_type == "outOfOffice":
+        category, movability = "ooo", 0
+    elif event_type == "focusTime":
+        category, movability = "focus_block", 10
+    elif event_type == "workingLocation":
+        category, movability = "working_location", 10  # not really a conflict
+    elif status == "tentative":
+        category, movability = "tentative", 9
+    elif not visible:
+        # Workspace "free/busy only" sharing — we see the event but not the title
+        category, movability = "opaque", 5  # neutral default; user can't auto-decide
+    else:
+        category, movability = "generic_meeting", 5  # default before title scan
+        for pattern, cat, mov in TITLE_RULES:
+            if pattern.search(summary):
+                category, movability = cat, mov
+                break
+
+    # Tentative status weakens any classification by 1 step
+    if status == "tentative" and category != "tentative":
+        movability = min(10, movability + 1)
+
+    # Larger meetings are harder to shift (coordination cost)
+    if attendees and len(attendees) >= 6 and movability > 2:
+        movability = max(2, movability - 2)
+
+    # All-day events are usually OOO-like
+    if is_all_day and category == "generic_meeting":
+        category, movability = "all_day_block", 1
+
+    return {
+        "category": category,
+        "movability": movability,
+        "recurring": recurring,
+        "visible": visible,
+        "summary": summary,
+        "attendee_count": len(attendees),
+        "status": status,
+        "transparency": transparency,
+        "is_all_day": is_all_day,
+    }
+
+
+def event_blocks_time(event: dict, classification: dict) -> bool:
+    """Should this event count as a conflict for slot-finding?"""
+    if classification["transparency"] == "transparent":
+        return False  # event explicitly marked as not blocking
+    if classification["status"] == "cancelled":
+        return False
+    if classification["category"] == "working_location":
+        return False  # just a location marker
+    # Declined invites — user has said no, so we don't count them
+    for a in event.get("attendees", []):
+        if a.get("self") and a.get("responseStatus") == "declined":
+            return False
+    return True
+
+
+# ----------------------------------------------------------------------------
+# Slot finding + scoring
+# ----------------------------------------------------------------------------
+
+def build_busy_map(
+    events_by_email: dict[str, list[dict]]
+) -> dict[str, list[tuple[dt.datetime, dt.datetime, dict]]]:
+    """For each attendee, list (start, end, classification) for blocking events."""
+    out: dict[str, list[tuple[dt.datetime, dt.datetime, dict]]] = {}
+    for email, events in events_by_email.items():
+        blocks: list[tuple[dt.datetime, dt.datetime, dict]] = []
+        for ev in events:
+            cls = classify_event(ev)
+            if not event_blocks_time(ev, cls):
+                continue
+            start = parse_event_time(ev, "start")
+            end = parse_event_time(ev, "end")
+            if not start or not end:
+                continue
+            blocks.append((start, end, cls))
+        out[email] = blocks
+    return out
+
+
+def score_slot(
+    cursor: dt.datetime,
+    slot_end: dt.datetime,
+    conflicts: list[dict],
+    work_start_hour: int,
+    work_end_hour: int,
+) -> dict:
+    """Return {score, breakdown} for a candidate slot.
+
+    Base 100; each conflict subtracts (10 - movability) × 5 (max 50 per
+    conflict, 0 for trivially movable). Time-of-day penalties for lunch
+    overlap, day-edge slots, and very early/very late hours.
+    """
+    breakdown: list[dict] = []
+    score = 100
+
+    for c in conflicts:
+        penalty = (10 - c["conflict"]["movability"]) * 5
+        score -= penalty
+        breakdown.append({"label": f"conflict: {c['attendee']} ({c['conflict']['category']})", "delta": -penalty})
+
+    local = cursor.astimezone()
+    local_end = slot_end.astimezone()
+
+    # Lunch overlap (any portion of 12:00-13:00 local)
+    lunch_start = local.replace(hour=12, minute=0, second=0, microsecond=0)
+    lunch_end = local.replace(hour=13, minute=0, second=0, microsecond=0)
+    if local < lunch_end and local_end > lunch_start:
+        score -= 10
+        breakdown.append({"label": "lunch overlap", "delta": -10})
+
+    # First 30 min of working day
+    if local.hour == work_start_hour and local.minute < 30:
+        score -= 5
+        breakdown.append({"label": "day-edge (early)", "delta": -5})
+
+    # Last 30 min of working day (slot ends at or past work_end - 30 min)
+    if local_end.hour == work_end_hour or (local_end.hour == work_end_hour - 1 and local_end.minute >= 30):
+        score -= 5
+        breakdown.append({"label": "day-edge (late)", "delta": -5})
+
+    score = max(0, score)
+    return {"score": score, "breakdown": breakdown}
+
+
+def make_ask_context(attendee: str, conflict_block: tuple[dt.datetime, dt.datetime, dict]) -> dict:
+    """Structured per-conflict data the skill renders into ask-messages."""
+    start, end, cls = conflict_block
+    return {
+        "attendee": attendee,
+        "conflict": {
+            "visible": cls["visible"],
+            "summary": cls["summary"],
+            "category": cls["category"],
+            "movability": cls["movability"],
+            "recurring": cls["recurring"],
+            "status": cls["status"],
+            "is_all_day": cls["is_all_day"],
+            "attendee_count": cls["attendee_count"],
+            "conflict_start": start.astimezone().isoformat(),
+            "conflict_end": end.astimezone().isoformat(),
+        },
+    }
+
+
 def find_candidate_slots(
-    busy_by_email: dict[str, list[tuple[dt.datetime, dt.datetime]]],
+    busy_by_email: dict[str, list[tuple[dt.datetime, dt.datetime, dict]]],
     start: dt.datetime,
     end: dt.datetime,
     duration: dt.timedelta,
-    work_start_hour: int = 9,
-    work_end_hour: int = 17,
+    work_start_hour: int,
+    work_end_hour: int,
     step: dt.timedelta = dt.timedelta(minutes=15),
 ) -> list[dict]:
-    """Slide a duration-sized window through [start, end] within working hours.
-
-    For each window, count how many attendees have an overlapping busy block.
-    Returns slots sorted by conflict count ascending (fully free first).
-    """
     slots: list[dict] = []
     cursor = start
     while cursor + duration <= end:
@@ -134,31 +379,83 @@ def find_candidate_slots(
             and local.date() == local_end.date()
             and local.weekday() < 5
         )
-        if in_window:
-            conflicts = [
-                email
-                for email, blocks in busy_by_email.items()
-                if any(b_start < slot_end and b_end > cursor for b_start, b_end in blocks)
-            ]
-            slots.append({
-                "start": local.isoformat(),
-                "end": local_end.isoformat(),
-                "conflicts": conflicts,
-            })
+        if not in_window:
+            cursor += step
+            continue
+
+        conflicts: list[dict] = []
+        for email, blocks in busy_by_email.items():
+            for b_start, b_end, cls in blocks:
+                if b_start < slot_end and b_end > cursor:
+                    conflicts.append(make_ask_context(email, (b_start, b_end, cls)))
+                    break  # one conflict per attendee per slot is enough
+
+        scoring = score_slot(cursor, slot_end, conflicts, work_start_hour, work_end_hour)
+        slots.append({
+            "start": local.isoformat(),
+            "end": local_end.isoformat(),
+            "score": scoring["score"],
+            "score_breakdown": scoring["breakdown"],
+            "conflicts": conflicts,
+        })
         cursor += step
-    slots.sort(key=lambda s: len(s["conflicts"]))
+
     return slots
 
+
+def conflict_signature(slot: dict) -> tuple:
+    """Hashable fingerprint of a slot's conflicts (attendee + event identity).
+
+    Two slots with the same conflict signature offer the same trade-off — there's
+    no reason to surface both. Empty tuple means "all-free" and isn't deduped.
+    """
+    return tuple(sorted(
+        (c["attendee"], c["conflict"].get("summary") or c["conflict"]["category"])
+        for c in slot["conflicts"]
+    ))
+
+
+def dedup_and_rank(slots: list[dict], top_n: int) -> list[dict]:
+    """Greedily pick the top N slots by score, with two dedup rules:
+    1. No two slots may overlap in time.
+    2. No two slots may share the same conflict signature (same attendees with
+       the same blocking events) — that's the same negotiation twice.
+    """
+    selected: list[dict] = []
+    seen_sigs: set[tuple] = set()
+    for s in sorted(slots, key=lambda x: (-x["score"], x["start"])):
+        if len(selected) >= top_n:
+            break
+        s_start = dt.datetime.fromisoformat(s["start"])
+        s_end = dt.datetime.fromisoformat(s["end"])
+        if any(
+            dt.datetime.fromisoformat(t["start"]) < s_end
+            and dt.datetime.fromisoformat(t["end"]) > s_start
+            for t in selected
+        ):
+            continue
+        sig = conflict_signature(s)
+        if sig and sig in seen_sigs:
+            continue  # same trade-off as an already-selected slot
+        seen_sigs.add(sig)
+        selected.append(s)
+    return selected
+
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--emails", required=True, help="Comma-separated attendee emails")
-    p.add_argument("--start", required=True, help="ISO 8601, e.g. 2026-05-13T09:00")
+    p.add_argument("--start", required=True, help="ISO 8601, e.g. 2026-05-14T09:00")
     p.add_argument("--end", required=True, help="ISO 8601 (exclusive)")
     p.add_argument("--duration", type=int, required=True, help="Slot duration in minutes")
     p.add_argument("--work-start", type=int, default=9, help="Working-hours start (local hour, 24h)")
     p.add_argument("--work-end", type=int, default=17, help="Working-hours end (local hour, 24h)")
     p.add_argument("--impersonate", help="User email for service-account DWD impersonation")
+    p.add_argument("--top", type=int, default=5, help="Number of ranked slots to return (default 5)")
     args = p.parse_args()
 
     emails = [e.strip() for e in args.emails.split(",") if e.strip()]
@@ -168,41 +465,29 @@ def main() -> None:
 
     creds = get_credentials(impersonate=args.impersonate)
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-    result = (
-        service.freebusy()
-        .query(body={
-            "timeMin": start.isoformat(),
-            "timeMax": end.isoformat(),
-            "items": [{"id": e} for e in emails],
-        })
-        .execute()
-    )
 
-    calendars = result.get("calendars", {})
-    busy_by_email: dict[str, list[tuple[dt.datetime, dt.datetime]]] = {}
-    errors_by_email: dict[str, list[dict]] = {}
+    events_by_email: dict[str, list[dict]] = {}
+    errors_by_email: dict[str, str] = {}
     for email in emails:
-        cal = calendars.get(email, {})
-        if errs := cal.get("errors"):
-            errors_by_email[email] = errs
-        busy_by_email[email] = [
-            (dt.datetime.fromisoformat(b["start"]), dt.datetime.fromisoformat(b["end"]))
-            for b in cal.get("busy", [])
-        ]
+        events, err = fetch_events(service, email, start, end)
+        if err:
+            errors_by_email[email] = err
+        events_by_email[email] = events
 
-    slots = find_candidate_slots(busy_by_email, start, end, duration, args.work_start, args.work_end)
+    busy_by_email = build_busy_map(events_by_email)
+    all_slots = find_candidate_slots(
+        busy_by_email, start, end, duration, args.work_start, args.work_end
+    )
+    top_slots = dedup_and_rank(all_slots, args.top)
 
     output = {
         "attendees": emails,
         "range": {"start": start.isoformat(), "end": end.isoformat()},
         "duration_minutes": args.duration,
         "working_hours": {"start": args.work_start, "end": args.work_end},
-        "busy": {
-            email: [{"start": s.isoformat(), "end": e.isoformat()} for s, e in blocks]
-            for email, blocks in busy_by_email.items()
-        },
         "errors": errors_by_email,
-        "candidate_slots": slots,
+        "ranked_slots": top_slots,
+        "total_slots_considered": len(all_slots),
     }
     json.dump(output, sys.stdout, indent=2)
     sys.stdout.write("\n")
