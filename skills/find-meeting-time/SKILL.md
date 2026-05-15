@@ -33,16 +33,33 @@ Include the **requester's own email** in `--emails` — their conflicts matter t
 `$ARGUMENTS` — a free-form description of the meeting. Examples:
 
 - `30 min with alice@example.com and bob@example.com this week`
-- `1 hr with the platform team Tue or Wed afternoon`
+- `1 hr with @eve and #dtx-eng Tue or Wed afternoon`
 - `45 min sync with Carol, Dave, and Eve before Friday`
 
 Resolve the inputs into a concrete plan:
 - **Attendees**: emails preferred; names are OK if Google Calendar's autocomplete will find them in the Confluent directory. Always include the requester (`mseal@confluent.io` unless specified otherwise).
+- **Slack references** (`@handle` and `#channel`): resolve to emails *before* invoking `freebusy.py`. See the "Resolving Slack references" section below.
 - **Duration**: default 30 min if not specified.
-- **Date range**: convert relative phrases to absolute dates using today's date from the system context. Default to the next 5 business days if unspecified.
+- **Date range**: convert relative phrases to absolute dates using today's date from the system context. **Always pass `--start >= now`**: never query for slots in the past. If the user says "this week" and it's already mid-afternoon Friday, snap `--start` to the next business-day morning rather than rewinding to Monday. **Never propose a slot whose start time has already passed** at the time of response. Default to the next 5 business days if unspecified.
 - **Working hours**: default to 9:00–17:00 local. If multiple timezones are at play, prefer overlap windows and call out the timezone math in the final answer.
 
 If the description is too ambiguous to act on (no attendees, or a window that's clearly nonsensical), ask **one** clarifying question, then proceed.
+
+## Resolving Slack references (`@handle`, `#channel`)
+
+When the user names attendees via Slack handles or channels, resolve them to emails *before* calling `freebusy.py`. The cache lives at `~/.config/ai-seal-tools/find-meeting-time/slack_refs.yaml` (Drive-backed, gitignored). Workflow:
+
+1. **Read the cache** with `Read(<config.local>/find-meeting-time/slack_refs.yaml)`. For each `@handle` and `#channel` in the user's request, check the `handles:` and `channels:` sections.
+2. **For cache hits**, use the cached value directly:
+   - `@eve` → `handles.eve.email`
+   - `#dtx-eng` → `channels.dtx-eng.members` (list of emails)
+3. **For cache misses, look up via Glean**:
+   - `@handle` → `mcp__glean__search` with `app=people` and `query=<handle>`. Read the `email` field from the top result. Cache it with `record_slack_ref.py handle --handle <h> --email <e> --source glean`.
+   - `#channel` → `mcp__glean__search` with `app=slack` and `channel=<name>` and `sort_by_recency=true`, ~20 results. Extract unique author emails. Cache with `record_slack_ref.py channel --name <n> --members <emails-csv> --source glean --note "best-effort from recent authors"`.
+4. **Handle ambiguity**: if a `@handle` Glean search returns multiple plausible matches, ask the user which person they meant rather than guessing. If a `#channel` search returns zero authors, surface that and ask the user to list the people manually.
+5. **For Slack-message rendering** (the `@mention` gap in the Slack message templates below), use `reverse_email_to_handle` in `slack_refs.py` — given an email from a conflict's `conflict_attendees`, look up the cached handle so the rendered DM uses the right `@`-mention.
+
+A real Slack MCP would replace the Glean fallback with authoritative lookups; the cache layout and CLI stay the same. Until then, channel-member resolution is *best-effort* and Claude should mention in the Notes when relying on inferred membership.
 
 ## API path: helper output
 

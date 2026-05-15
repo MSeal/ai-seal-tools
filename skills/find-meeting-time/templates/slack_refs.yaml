@@ -1,0 +1,29 @@
+# Cache of Slack reference → Calendar identity mappings, used by
+# /find-meeting-time when the user's input contains `@handle` or
+# `#channel` markers. Populated by Claude via record_slack_ref.py
+# after a Glean lookup, or hand-edited.
+#
+# Two sections, both keyed without the leading @ / # marker:
+#
+# handles:
+#   eve:                       # Slack handle → email (one-to-one)
+#     email: eve@example.com
+#     source: glean
+#     fetched_at: 2026-05-15T10:00:00-07:00
+#   alice: alice@example.com      # bare-string shorthand for hand-curated entries
+#
+# channels:
+#   dtx-eng:                       # channel name → member emails
+#     members:
+#       - alice@example.com
+#       - bob@example.com
+#     source: glean (best-effort)
+#     note: "Members inferred from recent authors; may be incomplete."
+#     fetched_at: 2026-05-15T10:00:00-07:00
+#
+# Channel resolution via Glean is best-effort — Glean indexes message
+# authors but isn't an authoritative membership list. Re-fetch
+# periodically if the channel composition matters for ranking.
+
+handles: {}
+channels: {}

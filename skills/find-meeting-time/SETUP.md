@@ -315,6 +315,41 @@ attendee_tz_outside_hours: 40    # TZ mismatch is a strong signal for me
 Every helper run echoes the effective weights into the output JSON under
 `score_weights`, so you can confirm what actually got loaded.
 
+### `slack_refs.yaml` — `@handle` and `#channel` → email cache
+
+Maps Slack references in user input to Calendar identities. Populated
+on-demand by Claude via Glean lookups (or hand-edited). Two sections:
+
+```yaml
+handles:
+  eve:                       # @eve
+    email: eve@example.com
+    source: glean
+    fetched_at: ...
+  alice: alice@example.com      # bare-string shorthand
+
+channels:
+  dtx-eng:                       # #dtx-eng
+    members: [alice@x, bob@x, carol@x]
+    source: glean (best-effort)
+    note: "Inferred from recent message authors..."
+    fetched_at: ...
+```
+
+**Channel resolution is best-effort today.** We use Glean's Slack
+index to extract recent message authors, which is NOT the same as
+authoritative channel membership. Lurkers and recent joiners may
+be missing. Once a Slack MCP gets approved at Confluent, the source
+swaps to authoritative — same cache layout, just a different parser
+module (`slack_refs_slack.py` analogous to the current
+`slack_refs_glean.py`). Until then, re-fetch channels periodically.
+
+The source contract lives in `seniority.py`-style isolation:
+`slack_refs.py` is source-agnostic, `slack_refs_glean.py` knows the
+Glean JSON shape, and `record_slack_ref.py` is the thin CLI that
+writes entries. Adding any other directory backend means dropping
+a new `slack_refs_<src>.py` with the same `parse_*` signatures.
+
 ### `seniority.yaml` — per-attendee tiers for the leadership penalty
 
 Maps `email → {tier, title, ...}`. Used by `freebusy.py` to penalize slots
