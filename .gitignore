@@ -258,6 +258,10 @@ CLAUDE.local.md
 **/TODO.local.md
 **/NOTES.local.md
 
+# Per-machine overrides for any *.yaml configured by a skill or utility
+# (e.g. skills/find-meeting-time/score_weights.local.yaml).
+**/*.local.yaml
+
 # Scratch dir — temporary working files (draft descriptions, intermediate
 # outputs, anything generated for human review that isn't a repo artifact).
 # See CLAUDE.md "Scratch directory".

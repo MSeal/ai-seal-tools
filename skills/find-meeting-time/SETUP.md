@@ -239,9 +239,11 @@ differs, edit the `target:` lines there.
 
 ### `config.yaml` — what the helper needs
 
-Minimal — the helper consults this only for **working hours**, which
-determine the slot search space. Everything else (lunch, day-of-week bias,
-defended blocks, etc.) lives in `preferences.md` as prose for Claude.
+The helper consults this for two things: **working hours** (which determine
+the slot search space) and **per-attendee timezones** (which apply a
+scoring penalty when a slot lands outside an attendee's local working
+hours). Everything else (lunch, day-of-week bias, defended blocks, etc.)
+lives in `preferences.md` as prose for Claude.
 
 ```yaml
 working_hours:
@@ -249,6 +251,29 @@ working_hours:
   # Per-day overrides — uncomment to use:
   # monday:  "10:00-17:00"     # late start Monday
   # friday:  "09:00-15:00"     # early end Friday
+
+# Per-attendee timezones (optional). Slots that fall outside an attendee's
+# working hours in their local TZ get a -20 penalty in score_breakdown,
+# labeled like "outside working hours for alice@example.com (tue 5:30pm
+# America/New_York)" so Claude can cite the local time in the ask-message.
+# Email lookup is case-insensitive. Missing entries default to the system
+# timezone, so add entries only for attendees you know are distributed.
+# attendee_timezones:
+#   coworker-in-ny@example.com: America/New_York
+#   coworker-in-eu@example.com: Europe/Berlin
+
+# Time-windowed TZ overrides for travel / out-of-town periods (optional).
+# Inclusive start/end (YYYY-MM-DD). Overrides the base attendee_timezones
+# entry for the affected attendee when the slot's date falls inside the
+# window. The `note` is appended to the score_breakdown label so Claude
+# can cite the reason (e.g. "outside working hours for mike (thu 7:00pm
+# America/New_York, NYC travel)").
+# attendee_timezone_exceptions:
+#   - email: coworker-in-sf@example.com
+#     tz:    America/New_York
+#     start: 2026-05-13
+#     end:   2026-05-16
+#     note:  NYC travel
 ```
 
 CLI overrides for one-off queries:
@@ -258,6 +283,37 @@ uv run --script .../freebusy.py [...] \
   --work-start 10:00 --work-end 18:00 \
   --config /path/to/other-config.yaml
 ```
+
+### `score_weights.yaml` — tunable scoring magnitudes
+
+The helper's scoring penalties (lunch overlap, day-edges, conflict
+multiplier, TZ-outside-hours) live in
+`skills/find-meeting-time/score_weights.yaml` — committed defaults
+everyone shares. Each entry controls a single penalty:
+
+```yaml
+conflict_movability_multiplier: 5    # per_conflict = (10 - movability) * this
+lunch_overlap: 10
+day_edge_early: 5
+day_edge_late: 5
+attendee_tz_outside_hours: 20
+```
+
+To tailor weights for your local setup or experiment with different
+balances without committing, create a sibling file
+`skills/find-meeting-time/score_weights.local.yaml` and specify only the
+keys you want to change. The file is gitignored (`**/*.local.yaml`) and
+overlays the committed defaults — anything you don't list keeps its
+default value. Example:
+
+```yaml
+# score_weights.local.yaml
+lunch_overlap: 2                 # I'm fine with working lunches
+attendee_tz_outside_hours: 40    # TZ mismatch is a strong signal for me
+```
+
+Every helper run echoes the effective weights into the output JSON under
+`score_weights`, so you can confirm what actually got loaded.
 
 ### `preferences.md` — what Claude reads
 

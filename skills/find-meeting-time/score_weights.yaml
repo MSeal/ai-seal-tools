@@ -1,0 +1,31 @@
+# Default scoring weights for find-meeting-time slot ranking.
+# Each entry controls a single penalty applied in freebusy.py's score_slot.
+# Higher penalty = a slot scores lower when that condition fires.
+#
+# The base score is 100; final score is floored at 0. Don't bother changing
+# either of those — they're structural, not preferential.
+#
+# To override these values for your local setup, create a sibling file
+# `score_weights.local.yaml` and specify only the keys you want to change.
+# That file is gitignored so per-user / per-session tweaks don't leak into
+# commits.
+
+# Penalty applied per conflicting attendee:
+#   per_conflict = (10 - conflict.movability) * conflict_movability_multiplier
+# Movability 10 (focus block) → 0 penalty; movability 0 (OOO) → 50 penalty
+# at the default multiplier of 5.
+conflict_movability_multiplier: 5
+
+# Penalty when the slot overlaps lunch (12:00-13:00 local).
+lunch_overlap: 10
+
+# Penalty when the slot starts within the first 30 min of the working day.
+day_edge_early: 5
+
+# Penalty when the slot ends within the last 30 min of the working day.
+day_edge_late: 5
+
+# Penalty applied per attendee whose local time is outside their working
+# hours (only fires for attendees with a configured timezone in
+# config.yaml's `attendee_timezones` map).
+attendee_tz_outside_hours: 20

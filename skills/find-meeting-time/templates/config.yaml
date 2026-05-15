@@ -1,10 +1,30 @@
-# find-meeting-time — engine-level config (working hours only).
+# find-meeting-time — engine-level config.
 # This file holds constants the helper script must apply BEFORE invoking
-# Claude (slot search space). Subjective scheduling preferences live in
-# preferences.md alongside this file.
+# Claude (slot search space, attendee timezones). Subjective scheduling
+# preferences live in preferences.md alongside this file.
 
 working_hours:
   default: "09:00-17:00"
   # Per-day overrides — uncomment to use:
   # monday:    "10:00-17:00"     # late start Monday
   # friday:    "09:00-15:00"     # early end Friday
+
+# Optional: per-attendee timezones. Slots that fall outside an attendee's
+# working hours in their local TZ get a -20 penalty in score_breakdown.
+# Email lookup is case-insensitive. Missing entries default to the system
+# timezone, i.e., scored as if the attendee shares your TZ.
+# Use IANA timezone names (https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
+# attendee_timezones:
+#   coworker-in-ny@example.com: America/New_York
+#   coworker-in-eu@example.com: Europe/Berlin
+
+# Optional: time-windowed TZ overrides for travel / out-of-town periods.
+# Each entry overrides the base attendee_timezones entry for that email
+# when the slot's date falls within [start, end] (inclusive). The `note`
+# is included in score_breakdown labels so Claude can cite the reason.
+# attendee_timezone_exceptions:
+#   - email: coworker-in-sf@example.com
+#     tz:    America/New_York
+#     start: 2026-05-13
+#     end:   2026-05-16
+#     note:  NYC travel

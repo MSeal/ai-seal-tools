@@ -39,12 +39,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime as dt
 import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from google.auth import default as adc_default
@@ -67,6 +70,44 @@ TOKEN_FILE = CREDENTIALS_DIR / "google_token.json"
 SKILL_CONFIG_DIR = CONFIG_DIR / "find-meeting-time"
 CONFIG_FILE = SKILL_CONFIG_DIR / "config.yaml"
 PREFERENCES_FILE = SKILL_CONFIG_DIR / "preferences.md"
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCORE_WEIGHTS_FILE = SCRIPT_DIR / "score_weights.yaml"
+SCORE_WEIGHTS_LOCAL_FILE = SCRIPT_DIR / "score_weights.local.yaml"
+
+
+@dataclass(frozen=True)
+class ScoreWeights:
+    """Tunable penalties used by score_slot. Defaults come from
+    score_weights.yaml; per-user / per-session overrides come from
+    score_weights.local.yaml (gitignored) alongside it.
+    """
+    conflict_movability_multiplier: int = 5
+    lunch_overlap: int = 10
+    day_edge_early: int = 5
+    day_edge_late: int = 5
+    attendee_tz_outside_hours: int = 20
+
+    @classmethod
+    def load(
+        cls,
+        defaults_path: Path = SCORE_WEIGHTS_FILE,
+        local_path: Path = SCORE_WEIGHTS_LOCAL_FILE,
+    ) -> "ScoreWeights":
+        """Load defaults then overlay local overrides. Unknown keys are
+        ignored with a stderr warning so typos don't silently take effect."""
+        valid = {f.name for f in dataclasses.fields(cls)}
+        merged: dict[str, int] = {}
+        for path in (defaults_path, local_path):
+            if not path.exists():
+                continue
+            data = yaml.safe_load(path.read_text()) or {}
+            for k, v in data.items():
+                if k not in valid:
+                    print(f"[freebusy.py] {path.name}: unknown weight key {k!r}, ignoring", file=sys.stderr)
+                    continue
+                merged[k] = int(v)
+        return cls(**merged)
 
 DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 DEFAULT_WORK_HOURS = "09:00-17:00"
@@ -99,6 +140,89 @@ def load_working_hours(path: Path = CONFIG_FILE) -> dict[str, tuple[dt.time, dt.
 
     default_pair = parse(raw_default)
     return {day: parse(per_day[day]) if day in per_day else default_pair for day in DAY_NAMES}
+
+
+def load_attendee_timezones(path: Path = CONFIG_FILE) -> dict[str, str]:
+    """Read per-attendee timezones from config.yaml. Returns email (lowercased)
+    → IANA tz name (e.g., "America/New_York"). Empty dict if missing.
+
+    config.yaml shape (optional):
+        attendee_timezones:
+          alice@example.com: America/New_York
+          bob@example.com:   Europe/Berlin
+
+    Attendees without an entry are scored as if they share the system TZ
+    (today's behavior). Add entries selectively for known distributed people.
+    Travel / temporary overrides go in attendee_timezone_exceptions; see
+    load_attendee_timezone_exceptions.
+    """
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text()) or {}
+    tz_map = data.get("attendee_timezones") or {}
+    return {str(email).lower(): str(tz) for email, tz in tz_map.items() if tz}
+
+
+def _to_date(v) -> dt.date:
+    """Coerce YAML-loaded values to a date. PyYAML parses `2026-05-13`
+    natively as a date, but if the user quoted it we get a string."""
+    if isinstance(v, dt.datetime):
+        return v.date()
+    if isinstance(v, dt.date):
+        return v
+    return dt.date.fromisoformat(str(v))
+
+
+def load_attendee_timezone_exceptions(path: Path = CONFIG_FILE) -> list[dict]:
+    """Read time-windowed TZ overrides from config.yaml. Each entry has
+    {email (lowercased), tz, start: date, end: date, note: str | None}.
+
+    config.yaml shape (optional):
+        attendee_timezone_exceptions:
+          - email: carol@example.com
+            tz:    America/New_York
+            start: 2026-05-13
+            end:   2026-05-16
+            note:  NYC travel
+
+    `start` and `end` are inclusive. When a slot's date falls within an
+    exception window, that TZ overrides the entry in attendee_timezones
+    for the affected attendee. Malformed entries are skipped with a
+    stderr note rather than aborting the run.
+    """
+    if not path.exists():
+        return []
+    data = yaml.safe_load(path.read_text()) or {}
+    raw = data.get("attendee_timezone_exceptions") or []
+    parsed: list[dict] = []
+    for entry in raw:
+        try:
+            parsed.append({
+                "email": str(entry["email"]).lower(),
+                "tz": str(entry["tz"]),
+                "start": _to_date(entry["start"]),
+                "end": _to_date(entry["end"]),
+                "note": (str(entry["note"]) if entry.get("note") else None),
+            })
+        except (KeyError, ValueError, TypeError) as e:
+            print(f"[freebusy.py] skipping malformed tz exception {entry!r}: {e}", file=sys.stderr)
+    return parsed
+
+
+def _effective_tz_for(
+    email: str,
+    on_date: dt.date,
+    base: dict[str, str],
+    exceptions: list[dict],
+) -> tuple[str | None, str | None]:
+    """Resolve (tz_name, note) for an attendee on a given date. Exceptions
+    take priority over the base map; multiple overlapping exceptions resolve
+    to the first match (declaration order)."""
+    e = email.lower()
+    for ex in exceptions:
+        if ex["email"] == e and ex["start"] <= on_date <= ex["end"]:
+            return ex["tz"], ex.get("note")
+    return base.get(e), None
 
 
 # ----------------------------------------------------------------------------
@@ -356,25 +480,50 @@ def build_busy_map(
     return out
 
 
+def _outside_working_hours_local(
+    local_start: dt.datetime,
+    local_end: dt.datetime,
+    work_start: dt.time,
+    work_end: dt.time,
+) -> bool:
+    """True if the slot is outside the working window in the given local TZ.
+    Handles weekends and midnight-spanning slots in that TZ."""
+    if local_start.weekday() >= 5 or local_end.weekday() >= 5:
+        return True
+    if local_start.date() != local_end.date():
+        return True
+    return not (local_start.time() >= work_start and local_end.time() <= work_end)
+
+
 def score_slot(
     cursor: dt.datetime,
     slot_end: dt.datetime,
     conflicts: list[dict],
     work_start: dt.time,
     work_end: dt.time,
+    *,
+    attendees: list[str] | None = None,
+    attendee_timezones: dict[str, str] | None = None,
+    attendee_timezone_exceptions: list[dict] | None = None,
+    weights: ScoreWeights | None = None,
 ) -> dict:
     """Return {score, breakdown} for a candidate slot.
 
-    Structural penalties only — conflicts (weighted by inverse movability),
-    lunch overlap, and day-edge slots. Subjective overrides
-    (day-of-week biases, defended blocks, etc.) come from preferences.md
-    which Claude consumes in SKILL.md execution, not from this helper.
+    Structural penalties: conflicts (weighted by inverse movability), lunch
+    overlap, day-edge slots, and (when `attendee_timezones` is supplied)
+    "slot lands outside this attendee's working hours in their local TZ".
+    Magnitudes come from `weights` (defaults match score_weights.yaml).
+    Subjective overrides (day-of-week biases, defended blocks, etc.) come
+    from preferences.md which Claude consumes in SKILL.md execution.
     """
+    if weights is None:
+        weights = ScoreWeights()
+
     breakdown: list[dict] = []
     score = 100
 
     for c in conflicts:
-        penalty = (10 - c["conflict"]["movability"]) * 5
+        penalty = (10 - c["conflict"]["movability"]) * weights.conflict_movability_multiplier
         score -= penalty
         breakdown.append({"label": f"conflict: {c['attendee']} ({c['conflict']['category']})", "delta": -penalty})
 
@@ -386,18 +535,45 @@ def score_slot(
     lunch_start = dt.datetime.combine(date, dt.time(12, 0), tzinfo=local.tzinfo)
     lunch_end = dt.datetime.combine(date, dt.time(13, 0), tzinfo=local.tzinfo)
     if local < lunch_end and local_end > lunch_start:
-        score -= 10
-        breakdown.append({"label": "lunch overlap", "delta": -10})
+        score -= weights.lunch_overlap
+        breakdown.append({"label": "lunch overlap", "delta": -weights.lunch_overlap})
 
     # Day-edge penalties — first/last 30 min of working hours
     wh_start_dt = dt.datetime.combine(date, work_start, tzinfo=local.tzinfo)
     wh_end_dt = dt.datetime.combine(date, work_end, tzinfo=local.tzinfo)
     if local < wh_start_dt + dt.timedelta(minutes=30):
-        score -= 5
-        breakdown.append({"label": "day-edge (early)", "delta": -5})
+        score -= weights.day_edge_early
+        breakdown.append({"label": "day-edge (early)", "delta": -weights.day_edge_early})
     if local_end > wh_end_dt - dt.timedelta(minutes=30):
-        score -= 5
-        breakdown.append({"label": "day-edge (late)", "delta": -5})
+        score -= weights.day_edge_late
+        breakdown.append({"label": "day-edge (late)", "delta": -weights.day_edge_late})
+
+    # Cross-attendee TZ check — penalize slots outside an attendee's
+    # working hours in their own local TZ. Only fires for attendees with
+    # a configured base TZ (or an active exception window) in config.yaml;
+    # others are scored as if they share the system TZ.
+    if attendees and (attendee_timezones or attendee_timezone_exceptions):
+        base = attendee_timezones or {}
+        exceptions = attendee_timezone_exceptions or []
+        slot_date = local.date()
+        for email in attendees:
+            tz_name, note = _effective_tz_for(email, slot_date, base, exceptions)
+            if not tz_name:
+                continue
+            try:
+                tz = ZoneInfo(tz_name)
+            except ZoneInfoNotFoundError:
+                continue
+            a_start = cursor.astimezone(tz)
+            a_end = slot_end.astimezone(tz)
+            if _outside_working_hours_local(a_start, a_end, work_start, work_end):
+                score -= weights.attendee_tz_outside_hours
+                local_str = a_start.strftime("%a %-I:%M%p").lower()
+                label = f"outside working hours for {email} ({local_str} {tz_name}"
+                if note:
+                    label += f", {note}"
+                label += ")"
+                breakdown.append({"label": label, "delta": -weights.attendee_tz_outside_hours})
 
     score = max(0, score)
     return {"score": score, "breakdown": breakdown}
@@ -430,6 +606,11 @@ def find_candidate_slots(
     duration: dt.timedelta,
     working_hours: dict[str, tuple[dt.time, dt.time]],
     step: dt.timedelta = dt.timedelta(minutes=15),
+    *,
+    attendees: list[str] | None = None,
+    attendee_timezones: dict[str, str] | None = None,
+    attendee_timezone_exceptions: list[dict] | None = None,
+    weights: ScoreWeights | None = None,
 ) -> list[dict]:
     """Slide a duration-sized window through [start, end] within each day's
     configured working hours. Weekends skipped."""
@@ -458,7 +639,13 @@ def find_candidate_slots(
                     conflicts.append(make_ask_context(email, (b_start, b_end, cls)))
                     break  # one conflict per attendee per slot is enough
 
-        scoring = score_slot(cursor, slot_end, conflicts, wh_start, wh_end)
+        scoring = score_slot(
+            cursor, slot_end, conflicts, wh_start, wh_end,
+            attendees=attendees,
+            attendee_timezones=attendee_timezones,
+            attendee_timezone_exceptions=attendee_timezone_exceptions,
+            weights=weights,
+        )
         slots.append({
             "start": local.isoformat(),
             "end": local_end.isoformat(),
@@ -554,8 +741,17 @@ def main() -> None:
             errors_by_email[email] = err
         events_by_email[email] = events
 
+    attendee_timezones = load_attendee_timezones(args.config)
+    attendee_timezone_exceptions = load_attendee_timezone_exceptions(args.config)
+    weights = ScoreWeights.load()
     busy_by_email = build_busy_map(events_by_email)
-    all_slots = find_candidate_slots(busy_by_email, start, end, duration, working_hours)
+    all_slots = find_candidate_slots(
+        busy_by_email, start, end, duration, working_hours,
+        attendees=emails,
+        attendee_timezones=attendee_timezones,
+        attendee_timezone_exceptions=attendee_timezone_exceptions,
+        weights=weights,
+    )
     top_slots = dedup_and_rank(all_slots, args.top)
 
     output = {
@@ -564,7 +760,13 @@ def main() -> None:
         "duration_minutes": args.duration,
         "config_path": str(args.config) if args.config.exists() else f"{args.config} (using defaults)",
         "preferences_path": str(PREFERENCES_FILE) if PREFERENCES_FILE.exists() else None,
+        "score_weights": dataclasses.asdict(weights),
         "working_hours": {d: f"{ws.isoformat(timespec='minutes')}-{we.isoformat(timespec='minutes')}" for d, (ws, we) in working_hours.items()},
+        "attendee_timezones": attendee_timezones,
+        "attendee_timezone_exceptions": [
+            {**ex, "start": ex["start"].isoformat(), "end": ex["end"].isoformat()}
+            for ex in attendee_timezone_exceptions
+        ],
         "errors": errors_by_email,
         "ranked_slots": top_slots,
         "total_slots_considered": len(all_slots),
