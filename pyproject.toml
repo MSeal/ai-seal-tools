@@ -12,4 +12,13 @@ dependencies = [
 dev = [
     "pyright>=1.1.409",
     "ruff>=0.15.12",
+    "pytest>=8.0",
+    # freebusy.py uses PEP-723 inline deps at runtime; we mirror them in
+    # dev deps so the test suite can import the module directly.
+    "google-api-python-client>=2.196",
+    "google-auth-oauthlib>=1.4",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["utils", "skills/find-meeting-time"]
