@@ -28,7 +28,7 @@ Skills under `skills/` need to be registered with Claude Code before they're inv
 uv run utils/install_skills.py
 ```
 
-This symlinks each `skills/<name>/` into `~/.claude/skills/<name>/` and writes a `.skill-env` into each skill recording the active Python/Node/npx paths so helper scripts run under the right interpreters. It also pins any `npx`-launched MCP servers in `.mcp.json` to the captured node version by injecting it onto the server's `env.PATH` — keeping `command`/`args` untouched so MDM allowlist matching still works on managed machines.
+This symlinks each `skills/<name>/` into `~/.claude/skills/<name>/` and writes a `.skill-env` into each skill recording the active Python/Node/npx paths so helper scripts run under the right interpreters. It also materializes `.mcp.json` (gitignored) from `.mcp.json.template` (committed, canonical) with the captured node's bin directory injected onto each npx-launched server's `env.PATH` — keeps `command`/`args` literal (MDM-allowlist-compliant on managed machines) while still defeating nvm version drift between shells.
 
 If a skill has a `links.yaml`, the installer additionally creates personal-config symlinks under `config.local/<skill>/` (gitignored). Each entry's `target` is the real file location — typically a Google Drive Desktop sync folder so prefs persist across machines. If the Drive folder isn't present, the installer falls back to `~/.config/<skill>/` and warns; on a later run when Drive is available, the real file is migrated to Drive and the fallback path becomes a symlink. See `skills/find-meeting-time/SETUP.md` for the concrete example.
 

@@ -87,7 +87,7 @@ MODEL = "claude-sonnet-4-6"   # fast + capable
 
 ## Web Browsing (Playwright MCP)
 
-The Playwright MCP server is registered in `.mcp.json` and exposes `browser_*` tools (navigate, snapshot, click, type, screenshot, etc.) to any Claude Code session in this repo.
+The Playwright MCP server is registered via `.mcp.json.template` (committed, canonical) — `utils/install_skills.py` materializes the actual `.mcp.json` (gitignored) from the template on each run, injecting machine-specific `env.PATH`. Together they expose `browser_*` tools (navigate, snapshot, click, type, screenshot, etc.) to any Claude Code session in this repo.
 
 **Default pattern:** snapshot-driven. Take an a11y snapshot, act on refs, re-snapshot after state changes. Cheap and works for most sites.
 

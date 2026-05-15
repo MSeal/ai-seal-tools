@@ -13,12 +13,15 @@ runtimes that were active at install time:
 Helper scripts a skill calls out to should read .skill-env rather than relying
 on $PATH, so they run under the same interpreters the install was wired up for.
 
-If a .mcp.json exists at the repo root, any MCP server with `command: "npx"` is
-pinned to the captured node version by prepending the node's bin directory to
-the server's `env.PATH`. This defeats nvm version drift between shells without
-rewriting `command`/`args` — Confluent's MDM allowlist gates MCP loading on a
-literal match of those fields, so rewrites silently break loading on managed
-machines. Re-run after `nvm use <ver>` to re-pin to a different node.
+If a .mcp.json.template exists at the repo root, this installer generates
+.mcp.json from it, injecting the captured node's bin directory onto each
+npx-launched server's `env.PATH`. The template is the canonical, committed
+source; the generated .mcp.json is gitignored and carries the machine-
+specific PATH. This keeps the committed file clean while still defeating
+nvm version drift between shells. Confluent's MDM allowlist gates MCP
+loading on a literal match of `command` + `args` (env isn't validated), so
+the template-with-env-injection scheme stays compliant. Re-run after
+`nvm use <ver>` to re-pin to a different node.
 
 If a skill has a `links.yaml`, this installer also creates personal-config
 symlinks under <repo>/config.local/<skill>/ pointing to the canonical target
@@ -91,7 +94,7 @@ def main() -> None:
     for skill in skills:
         install_one(skill, dst_root / skill.name, runtimes, args.force, args.dry_run, prefix)
         install_config_links(skill, repo, args.dry_run, prefix)
-    mcp_action = pin_mcp_json(repo / ".mcp.json", runtimes, args.dry_run)
+    mcp_action = pin_mcp_json(repo / ".mcp.json.template", repo / ".mcp.json", runtimes, args.dry_run)
     print(f"{prefix}.mcp.json: {mcp_action}")
 
 
@@ -142,43 +145,44 @@ def write_skill_env(src: Path, runtimes: dict[str, str], dry: bool) -> str:
     return action
 
 
-def pin_mcp_json(mcp_file: Path, runtimes: dict[str, str], dry: bool) -> str:
-    """Pin npx-launched MCP servers to the captured node via env.PATH.
+def pin_mcp_json(template_file: Path, mcp_file: Path, runtimes: dict[str, str], dry: bool) -> str:
+    """Materialize `mcp_file` from `template_file` with machine-specific
+    env.PATH injected for any npx-launched server.
+
+    Source of truth is `.mcp.json.template` (committed, canonical). The
+    generated `.mcp.json` (gitignored) carries the env.PATH injection that
+    pins MCP servers to the captured node version — defeats nvm version
+    drift between shells. Reading from the template each run keeps the
+    generated file from accumulating cruft and means the env injection is
+    always relative to the canonical command/args.
 
     Confluent's MDM allowlist gates MCP loading on a literal match of
-    `command` + `args` against the managed plist (see CLAUDE memory entry
-    `mdm-mcp-allowlist`). Rewriting `command: "npx"` to an absolute node path
-    makes the server fail to load silently. Instead, leave `command`/`args`
-    untouched and prepend the captured node's bin directory onto the server's
-    `env.PATH` — MDM doesn't validate env, so this safely defeats nvm version
-    drift between the shell that launched Claude Code and the one used here.
+    `command` + `args` (see CLAUDE memory `mdm-mcp-allowlist`). The
+    template holds the literal-match form; env is invisible to MDM, so
+    injecting it is safe.
     """
-    if not mcp_file.exists():
-        return "skip (no .mcp.json)"
+    if not template_file.exists():
+        return f"skip (no {template_file.name})"
     node = runtimes.get("NODE")
     if not node:
         return "skip (node not on PATH)"
     node_bin = str(Path(node).parent)
 
-    data = json.loads(mcp_file.read_text())
-    changed = False
+    data = json.loads(template_file.read_text())
     for server in data.get("mcpServers", {}).values():
         if server.get("command") != "npx":
             continue
         env = dict(server.get("env", {}))
         existing = env.get("PATH", os.environ.get("PATH", ""))
         parts = [p for p in existing.split(os.pathsep) if p and p != node_bin]
-        new_path = os.pathsep.join([node_bin, *parts])
-        if env.get("PATH") == new_path:
-            continue
-        env["PATH"] = new_path
+        env["PATH"] = os.pathsep.join([node_bin, *parts])
         server["env"] = env
-        changed = True
 
-    if not changed:
+    rendered = json.dumps(data, indent=2) + "\n"
+    if mcp_file.exists() and mcp_file.read_text() == rendered:
         return "ok"
     if not dry:
-        mcp_file.write_text(json.dumps(data, indent=2) + "\n")
+        mcp_file.write_text(rendered)
     return "update"
 
 

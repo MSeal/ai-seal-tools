@@ -236,35 +236,67 @@ def _write_mcp(path: Path, command: str, args: list[str], env: dict | None = Non
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def test_pin_mcp_json_injects_path_for_npx(tmp_path):
-    """An entry with command=npx gets node bin prepended onto env.PATH."""
+def test_pin_mcp_json_generates_from_template(tmp_path):
+    """Template → generated file with env.PATH injected; template untouched."""
+    template = tmp_path / ".mcp.json.template"
     mcp = tmp_path / ".mcp.json"
-    _write_mcp(mcp, "npx", ["@playwright/mcp@latest"])
+    _write_mcp(template, "npx", ["@playwright/mcp@latest"])
     runtimes = {"NODE": "/opt/node/v26/bin/node"}
 
-    action = ins.pin_mcp_json(mcp, runtimes, dry=False)
+    action = ins.pin_mcp_json(template, mcp, runtimes, dry=False)
     assert action == "update"
+    assert mcp.exists()
     written = json.loads(mcp.read_text())
     env = written["mcpServers"]["playwright"]["env"]
     assert env["PATH"].startswith("/opt/node/v26/bin:")
     assert written["mcpServers"]["playwright"]["command"] == "npx"
     assert written["mcpServers"]["playwright"]["args"] == ["@playwright/mcp@latest"]
+    # template is unchanged (no env injected back into it)
+    assert "env" not in json.loads(template.read_text())["mcpServers"]["playwright"]
 
 
 def test_pin_mcp_json_idempotent(tmp_path):
-    """Re-pinning with the same node should be a no-op."""
+    """Second run with same node + same template → 'ok', no rewrite."""
+    template = tmp_path / ".mcp.json.template"
     mcp = tmp_path / ".mcp.json"
-    _write_mcp(mcp, "npx", ["@playwright/mcp@latest"])
+    _write_mcp(template, "npx", ["@playwright/mcp@latest"])
     runtimes = {"NODE": "/opt/node/v26/bin/node"}
-    ins.pin_mcp_json(mcp, runtimes, dry=False)
-    assert ins.pin_mcp_json(mcp, runtimes, dry=False) == "ok"
+    ins.pin_mcp_json(template, mcp, runtimes, dry=False)
+    assert ins.pin_mcp_json(template, mcp, runtimes, dry=False) == "ok"
 
 
 def test_pin_mcp_json_skips_non_npx(tmp_path):
-    """An entry with a non-npx command should be left alone entirely."""
+    """Non-npx entries in the template come through unchanged (no env added)."""
+    template = tmp_path / ".mcp.json.template"
     mcp = tmp_path / ".mcp.json"
-    _write_mcp(mcp, "chewie", ["mcp-server", "serve"])
+    _write_mcp(template, "chewie", ["mcp-server", "serve"])
     runtimes = {"NODE": "/opt/node/v26/bin/node"}
-    assert ins.pin_mcp_json(mcp, runtimes, dry=False) == "ok"
+
+    ins.pin_mcp_json(template, mcp, runtimes, dry=False)
     written = json.loads(mcp.read_text())
     assert "env" not in written["mcpServers"]["playwright"]
+
+
+def test_pin_mcp_json_skips_when_template_missing(tmp_path):
+    """No template at the repo root → skip with a clear message, do nothing."""
+    template = tmp_path / "does-not-exist.template"
+    mcp = tmp_path / ".mcp.json"
+    runtimes = {"NODE": "/opt/node/v26/bin/node"}
+    action = ins.pin_mcp_json(template, mcp, runtimes, dry=False)
+    assert action.startswith("skip")
+    assert not mcp.exists()
+
+
+def test_pin_mcp_json_regenerates_canonical_when_mcp_drifted(tmp_path):
+    """If something modified .mcp.json (e.g. an old install pass), running
+    again from the template overwrites it back to the canonical+env form."""
+    template = tmp_path / ".mcp.json.template"
+    mcp = tmp_path / ".mcp.json"
+    _write_mcp(template, "npx", ["@playwright/mcp@latest"])
+    # Simulate drift: someone wrote bogus content into .mcp.json
+    mcp.write_text('{"mcpServers": {"playwright": {"command": "wrong"}}}')
+    runtimes = {"NODE": "/opt/node/v26/bin/node"}
+    ins.pin_mcp_json(template, mcp, runtimes, dry=False)
+    written = json.loads(mcp.read_text())
+    assert written["mcpServers"]["playwright"]["command"] == "npx"
+    assert "env" in written["mcpServers"]["playwright"]
