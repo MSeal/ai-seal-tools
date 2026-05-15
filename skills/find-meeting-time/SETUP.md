@@ -27,10 +27,10 @@ UV_NO_CONFIG=1 uv run utils/install_skills.py
 
 # 3. Copy the OAuth client JSON over from the old machine (or re-download it
 #    from console.cloud.google.com → APIs & Services → Credentials → mseal-devel)
-mkdir -p ~/.config/ai-seal-tools
-scp old-machine:~/.config/ai-seal-tools/google_oauth_client.json \
-    ~/.config/ai-seal-tools/google_oauth_client.json
-chmod 600 ~/.config/ai-seal-tools/google_oauth_client.json
+mkdir -m 700 -p ~/.config/ai-seal-tools/credentials
+scp old-machine:~/.config/ai-seal-tools/credentials/google_oauth_client.json \
+    ~/.config/ai-seal-tools/credentials/google_oauth_client.json
+chmod 600 ~/.config/ai-seal-tools/credentials/google_oauth_client.json
 
 # 4. First run triggers OAuth consent in your browser; token caches afterward.
 UV_NO_CONFIG=1 uv run --script skills/find-meeting-time/freebusy.py \
@@ -84,7 +84,7 @@ used in project N" message.
   External
 - **App name**: anything (`find-meeting-time` is fine)
 - **Support email**: your `@example.com`
-- **Scopes**: add `.../auth/calendar.events.readonly` (search "events.readonly"). The narrower `calendar.freebusy` is *not* sufficient with the current helper — it doesn't surface event titles, which the movability classifier needs. If you previously set up the consent screen with `calendar.freebusy`, edit it and add `calendar.events.readonly` too; then delete `~/.config/ai-seal-tools/google_token.json` so the next run redoes consent with the new scope.
+- **Scopes**: add `.../auth/calendar.events.readonly` (search "events.readonly"). The narrower `calendar.freebusy` is *not* sufficient with the current helper — it doesn't surface event titles, which the movability classifier needs. If you previously set up the consent screen with `calendar.freebusy`, edit it and add `calendar.events.readonly` too; then delete `~/.config/ai-seal-tools/credentials/google_token.json` so the next run redoes consent with the new scope.
 - **Test users** (if External): add your own email
 
 If the Workspace admin policy requires app verification for external apps
@@ -113,13 +113,13 @@ apps. Don't share it publicly, but it isn't a critical-leak-class secret.)
 #### 4. Stage the file locally
 
 ```bash
-mkdir -p ~/.config/ai-seal-tools
-mv ~/Downloads/client_secret_*.json ~/.config/ai-seal-tools/google_oauth_client.json
-chmod 600 ~/.config/ai-seal-tools/google_oauth_client.json
+mkdir -m 700 -p ~/.config/ai-seal-tools/credentials
+mv ~/Downloads/client_secret_*.json ~/.config/ai-seal-tools/credentials/google_oauth_client.json
+chmod 600 ~/.config/ai-seal-tools/credentials/google_oauth_client.json
 ```
 
 Filename matters — `freebusy.py` looks for exactly
-`~/.config/ai-seal-tools/google_oauth_client.json`. If you name it
+`~/.config/ai-seal-tools/credentials/google_oauth_client.json`. If you name it
 `google_service_account.json` instead, the helper will try to parse it as a
 service-account JSON and fail confusingly.
 
@@ -143,7 +143,7 @@ Your default browser pops with Google's consent screen.
   the OAuth client. See [Alternative auth paths](#alternative-auth-paths).
 
 Once you consent, `freebusy.py` exits with a JSON dump and writes the token
-to `~/.config/ai-seal-tools/google_token.json` (perms tightened to 600 on
+to `~/.config/ai-seal-tools/credentials/google_token.json` (perms tightened to 600 on
 write). All future runs reuse that token until it's revoked or invalid.
 
 #### 6. Test with a colleague
@@ -165,27 +165,37 @@ the colleague taking any action.
 
 ## Credential layout
 
-Auth files (`google_oauth_client.json`, `google_token.json`, and any
-future `google_service_account.json`) live at the **parent** dir
-`~/.config/ai-seal-tools/`, **not** under any per-skill subdirectory.
-This is deliberate:
+Auth files live in a dedicated subdirectory:
 
-- The per-skill subdirectory `find-meeting-time/` is Drive-synced (see
-  next section), and credentials must never leave the local machine.
-- Each machine should mint and refresh its own OAuth token. Sharing a
-  refresh token across machines causes Google to invalidate one when
-  another refreshes.
-- Future skills that need Google API access should reuse the same
-  client/token (adding scopes as needed) rather than creating their own
-  per-skill credential files. Keeps the OAuth surface to one client.
+```
+~/.config/ai-seal-tools/credentials/         (mode 0700)
+  google_oauth_client.json                   (mode 0600 — Desktop OAuth client)
+  google_token.json                          (mode 0600 — Calendar refresh token)
+  google_sheets_token.json                   (mode 0600 — Sheets refresh token, if utils/sheets_writer.py has been run)
+  google_service_account.json                (mode 0600 — only if you use SA + DWD; doesn't exist by default)
+```
 
-Permissions on all credential files **must be 0600**. The helper writes
-the token atomically with that mode on every refresh; on a fresh
-install, when you stage the OAuth client JSON manually, set perms
-yourself:
+The directory boundary is deliberate. Credentials live **separately from
+per-skill config** (e.g., `~/.config/ai-seal-tools/find-meeting-time/`,
+which is Drive-synced):
+
+- Credentials must never leave the local machine. Each machine should mint
+  and refresh its own OAuth token; sharing a refresh token across machines
+  causes Google to invalidate one when another refreshes.
+- Multiple helpers (`freebusy.py`, `sheets_writer.py`) share the same
+  OAuth client but maintain **separate token files** — one per scope set —
+  so a Calendar consent doesn't grant Sheets access and vice versa.
+- Future helpers needing Google API access should reuse
+  `google_oauth_client.json` (adding the relevant scopes to the consent
+  screen) and write their own `google_<purpose>_token.json` alongside.
+
+Permissions: directory **0700**, files **0600**. The helpers write tokens
+atomically at 0600 on every refresh. On fresh install when you stage the
+OAuth client JSON manually:
 
 ```bash
-chmod 600 ~/.config/ai-seal-tools/google_oauth_client.json
+mkdir -m 700 -p ~/.config/ai-seal-tools/credentials
+chmod 600 ~/.config/ai-seal-tools/credentials/google_oauth_client.json
 ```
 
 ## Personal config
@@ -312,7 +322,7 @@ Each entry: symptom → diagnosis → fix.
   or the OAuth client got rotated.
 - **Fix**:
   ```bash
-  rm ~/.config/ai-seal-tools/google_token.json
+  rm ~/.config/ai-seal-tools/credentials/google_token.json
   ```
   Re-run the helper. The script falls through to the InstalledAppFlow path
   and opens a fresh browser consent.
@@ -328,7 +338,7 @@ Each entry: symptom → diagnosis → fix.
   1. Ensure the new scope is added to the OAuth consent screen in
      `console.cloud.google.com` (APIs & Services → OAuth consent screen →
      Edit App → Scopes → add `.../auth/calendar.events.readonly`).
-  2. `rm ~/.config/ai-seal-tools/google_token.json`
+  2. `rm ~/.config/ai-seal-tools/credentials/google_token.json`
   3. Re-run the helper. Browser pops with the new scope, you re-consent.
 
 ### `your application is authenticating by using local Application Default Credentials. The calendar-json.googleapis.com API requires a quota project`
@@ -400,8 +410,9 @@ To request from IT:
 Then save it as:
 
 ```bash
-mv <downloaded-sa-key>.json ~/.config/ai-seal-tools/google_service_account.json
-chmod 600 ~/.config/ai-seal-tools/google_service_account.json
+mkdir -m 700 -p ~/.config/ai-seal-tools/credentials
+mv <downloaded-sa-key>.json ~/.config/ai-seal-tools/credentials/google_service_account.json
+chmod 600 ~/.config/ai-seal-tools/credentials/google_service_account.json
 ```
 
 The helper auto-detects this file and uses it before the OAuth client path.

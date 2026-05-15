@@ -270,11 +270,12 @@ config.local/
 # Playwright MCP — accessibility snapshots dumped per browsing session
 .playwright-mcp/
 
-# Google credentials — these should live in ~/.config/ai-seal-tools/, never
-# in the repo. Safety net in case one lands here by accident.
+# Google credentials — these should live in ~/.config/ai-seal-tools/credentials/,
+# never in the repo. Safety net in case one lands here by accident.
 **/google_service_account.json
 **/google_oauth_client.json
 **/google_token.json
+**/google_sheets_token.json
 
 # Generated from .mcp.json.template by utils/install_skills.py with
 # machine-specific env.PATH injected. The template is the canonical source.

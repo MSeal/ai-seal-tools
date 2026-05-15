@@ -58,9 +58,12 @@ from googleapiclient.errors import HttpError
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.events.readonly"]
 CONFIG_DIR = Path.home() / ".config" / "ai-seal-tools"
-SERVICE_ACCOUNT = CONFIG_DIR / "google_service_account.json"
-CLIENT_SECRETS = CONFIG_DIR / "google_oauth_client.json"
-TOKEN_FILE = CONFIG_DIR / "google_token.json"
+# Credentials live in a dedicated subdir (mode 0700) so the "never sync this"
+# boundary is enforced by the filesystem, not by naming convention.
+CREDENTIALS_DIR = CONFIG_DIR / "credentials"
+SERVICE_ACCOUNT = CREDENTIALS_DIR / "google_service_account.json"
+CLIENT_SECRETS = CREDENTIALS_DIR / "google_oauth_client.json"
+TOKEN_FILE = CREDENTIALS_DIR / "google_token.json"
 SKILL_CONFIG_DIR = CONFIG_DIR / "find-meeting-time"
 CONFIG_FILE = SKILL_CONFIG_DIR / "config.yaml"
 PREFERENCES_FILE = SKILL_CONFIG_DIR / "preferences.md"

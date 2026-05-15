@@ -9,8 +9,9 @@
 """sheets_writer.py — read/write Google Sheets reusing the ai-seal-tools OAuth client.
 
 Auth model mirrors freebusy.py: same `google_oauth_client.json` at
-~/.config/ai-seal-tools/, but a *separate* token file (`google_sheets_token.json`)
-so the Calendar token's narrow scope isn't disturbed.
+~/.config/ai-seal-tools/credentials/, but a *separate* token file
+(`google_sheets_token.json`) so the Calendar token's narrow scope
+isn't disturbed.
 
 Subcommands:
   read   --id <spreadsheet-id> --range <A1>           → JSON to stdout
@@ -46,8 +47,9 @@ ADC_SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 CONFIG_DIR = Path.home() / ".config" / "ai-seal-tools"
-CLIENT_SECRETS = CONFIG_DIR / "google_oauth_client.json"
-TOKEN_FILE = CONFIG_DIR / "google_sheets_token.json"
+CREDENTIALS_DIR = CONFIG_DIR / "credentials"
+CLIENT_SECRETS = CREDENTIALS_DIR / "google_oauth_client.json"
+TOKEN_FILE = CREDENTIALS_DIR / "google_sheets_token.json"
 
 
 def _write_secret(path: Path, content: str) -> None:

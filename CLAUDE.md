@@ -13,6 +13,17 @@ Personal AI exploration repo. The goal is to build utilities, skills, and agents
 
 Don't create a git commit without explicit permission. Permission is scoped to a single commit by default — even after a "yes, commit" approval, ask again before the next commit unless the user indicates a wider scope (e.g., "commit freely in this session", "commit each time you reach a stable point", or a similar broadening). Soft-resetting a commit doesn't grant permission to re-commit — wait for the user.
 
+## Testing
+
+Any non-trivial change to a script under `utils/`, `skills/<name>/`, or `agents/<name>/` should have matching test coverage. Tests live in `tests/` and run via `uv run pytest`. Specifically:
+
+- **Pure functions** (parsers, classifiers, scoring math, dedup logic, etc.): add unit tests covering the cases that motivated the change plus the obvious edge cases. Regression tests for fixed bugs especially valuable — the "OOO Travel categorized as travel_block" classifier bug is locked in by `test_classify_ooo_beats_travel_ordering`.
+- **Functions that touch the filesystem**: use `tmp_path` and `monkeypatch` (see `tests/test_install_skills.py` for the pattern of fake-rooting Drive paths via monkey-patched detection).
+- **Functions that call Google APIs**: don't test against the real API. Mock the service object at the `service.spreadsheets().values()` (or equivalent) boundary — `tests/test_sheets_writer.py` has the pattern.
+- **New scripts**: ship with at least smoke tests (does it import? does `--help` work? does it fail gracefully when credentials are missing?). Add real unit tests as soon as logic in the script is non-obvious.
+
+When making a change, run `uv run pytest` before declaring done. If a change touches script logic without adding tests, call that out explicitly — sometimes a smoke-test-by-running-the-CLI is the right level for one-off utilities, but the default expectation is automated coverage.
+
 ## Structure
 
 ```
