@@ -59,3 +59,11 @@ learned_max_adjustment: 8
 seniority_threshold: 2
 seniority_penalty_per_tier_above: 5
 seniority_max_penalty: 20
+
+# Multiplier applied to per-conflict penalties when the conflict's
+# attendee was passed via --optional (rather than --emails). Optional
+# attendees are still queried (so we know if they happen to be free),
+# but conflicts on their calendars contribute less to slot ranking —
+# the meeting can proceed without them. 1.0 = treat same as required;
+# 0.0 = ignore their conflicts entirely.
+optional_attendee_penalty_multiplier: 0.3

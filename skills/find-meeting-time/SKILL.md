@@ -13,7 +13,8 @@ Answer "when can we meet?" — and, when nothing is fully free, "what's the leas
 
 ```bash
 UV_NO_CONFIG=1 uv run --script "$(dirname "$0")/freebusy.py" \
-  --emails <comma-separated-emails-including-the-requester> \
+  --emails <required-attendees-comma-separated-including-the-requester> \
+  [--optional <nice-to-have-attendees-comma-separated>] \
   --start  <ISO 8601> \
   --end    <ISO 8601> \
   --duration <minutes> \
@@ -22,6 +23,8 @@ UV_NO_CONFIG=1 uv run --script "$(dirname "$0")/freebusy.py" \
 ```
 
 Include the **requester's own email** in `--emails` — their conflicts matter too, and surfacing them helps the requester see what they'd need to move themselves.
+
+**Required vs optional attendees.** Anyone in `--emails` is "must-have": their conflicts apply the full penalty and a slot without them all is unbookable in practice. Anyone in `--optional` is "nice-to-have": their calendars are still queried (so we know if they're free), but their conflicts apply a reduced penalty (`optional_attendee_penalty_multiplier` in `score_weights.yaml`, default 0.3). Use the user's language to decide — phrases like "would be great if X can join", "if Carol's free", "FYI to Dave" all signal optional. Conflicts attributed to optional attendees show `[optional]` in their score_breakdown label.
 
 **Fall back to the browser path** only when no credentials are configured (the helper exits with a setup message). The browser path follows the snapshot-driven / vision-fallback discipline in `prompts/browsing.md`.
 
@@ -236,6 +239,16 @@ Notes:
 ```
 
 ### Rendering rules
+
+- **Surface tradeoffs explicitly** when the top slots have *different* conflict signatures and similar scores (within ~15 points). Don't just list them as independent items — render the comparison so the user can decide based on relationships, not just numbers:
+
+  > Two close options, each with a different ask:
+  > - **Tue 4–5 PM** (score 75) → ask **Alice** to move her 1:1 with manager (you've successfully moved this before)
+  > - **Wed 10–11 AM** (score 72) → ask **Bob AND Carol** to move their team standup
+  >
+  > Tue is one ask of a person you have an easy track record with; Wed is two asks of people whose meeting is a recurring team disruption. Tue probably wins unless you owe Alice favors.
+
+  When the conflict signatures overlap (same attendee, same event), don't render as a tradeoff — those aren't real alternatives.
 
 - **Top 3 always shown.** Show 4–5 if scores are close (within 15 points of #1).
 - **All-free slots first.** Stop at the score floor below 50 unless every option is below.

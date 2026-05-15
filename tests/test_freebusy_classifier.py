@@ -1135,6 +1135,99 @@ def test_score_slot_seniority_clamped_at_max():
     assert sen_entry["delta"] == -30  # clamped, not -300
 
 
+# ---------------------------------------------------------------------------
+# Required vs optional attendees (task #12)
+# ---------------------------------------------------------------------------
+
+def test_score_slot_required_attendee_full_penalty():
+    """When required_attendees=None or includes the conflict's attendee,
+    the full base penalty applies — preserves prior behavior."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 5, "category": "team_meeting"},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    # Without required_attendees → behaves as required (full penalty)
+    no_required = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17))
+    assert no_required["score"] == 75  # 100 - (10-5)*5 = 75
+
+    # required_attendees explicitly includes alice → same result
+    with_required = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                                  required_attendees={"alice@x"})
+    assert with_required["score"] == 75
+
+
+def test_score_slot_optional_attendee_reduced_penalty():
+    """Conflict's attendee not in required_attendees → penalty scaled by
+    optional_attendee_penalty_multiplier (default 0.3)."""
+    conflicts = [{
+        "attendee": "carol@x",
+        "conflict": {"movability": 5, "category": "team_meeting"},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           required_attendees={"alice@x", "bob@x"})  # carol absent → optional
+    # Base penalty 25, multiplier 0.3 → 8 (rounded)
+    assert result["score"] == 92
+    label = next(b["label"] for b in result["breakdown"] if "carol" in b["label"])
+    assert "[optional]" in label
+
+
+def test_score_slot_optional_lookup_is_case_insensitive():
+    """Conflict attendee in mixed case still matches lowercased required set."""
+    conflicts = [{
+        "attendee": "Alice@X",
+        "conflict": {"movability": 5, "category": "team_meeting"},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           required_attendees={"alice@x"})
+    # alice IS required (case-insensitive match) → full penalty, no [optional] label
+    label = next(b["label"] for b in result["breakdown"] if "Alice" in b["label"])
+    assert "[optional]" not in label
+
+
+def test_score_slot_optional_multiplier_zero_ignores_conflict():
+    """Setting multiplier to 0 effectively zeroes out optional conflicts."""
+    conflicts = [{
+        "attendee": "carol@x",
+        "conflict": {"movability": 5, "category": "team_meeting"},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    w = fb.ScoreWeights(optional_attendee_penalty_multiplier=0.0)
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           required_attendees={"alice@x"}, weights=w)
+    # carol's conflict penalty = base * 0 = 0; score stays at 100
+    assert result["score"] == 100
+
+
+def test_score_slot_required_and_optional_mixed():
+    """Mixed conflicts: required takes full, optional takes reduced."""
+    conflicts = [
+        {"attendee": "alice@x", "conflict": {"movability": 5, "category": "team_meeting"}},
+        {"attendee": "carol@x", "conflict": {"movability": 5, "category": "team_meeting"}},
+    ]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           required_attendees={"alice@x"})
+    # alice: full -25; carol: -25 * 0.3 = -8; net -33; score 67
+    assert result["score"] == 67
+
+
+def test_score_weights_loads_float_multiplier(tmp_path):
+    """ScoreWeights.load casts to the right type per field annotation."""
+    defaults = tmp_path / "score_weights.yaml"
+    defaults.write_text("optional_attendee_penalty_multiplier: 0.5\nlunch_overlap: 7\n")
+    w = fb.ScoreWeights.load(defaults, tmp_path / "missing.yaml")
+    assert w.optional_attendee_penalty_multiplier == 0.5
+    assert w.lunch_overlap == 7
+
+
 def test_score_slot_no_penalty_when_seniority_map_empty():
     """No seniority data → no senior-attendee breakdown entry regardless of
     who's on the conflict."""

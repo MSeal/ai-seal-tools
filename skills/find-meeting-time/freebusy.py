@@ -121,6 +121,12 @@ class ScoreWeights:
     seniority_threshold: int = 2
     seniority_penalty_per_tier_above: int = 5
     seniority_max_penalty: int = 20
+    # Penalty multiplier for conflicts on "optional" attendees' calendars.
+    # 1.0 = treat like required (no discount); 0.0 = ignore optional
+    # conflicts entirely. Default 0.3 means optional conflicts contribute
+    # ~a third of the penalty of required ones — they still inform the
+    # ranking but don't dominate it.
+    optional_attendee_penalty_multiplier: float = 0.3
 
     @classmethod
     def load(
@@ -130,17 +136,19 @@ class ScoreWeights:
     ) -> "ScoreWeights":
         """Load defaults then overlay local overrides. Unknown keys are
         ignored with a stderr warning so typos don't silently take effect."""
-        valid = {f.name for f in dataclasses.fields(cls)}
-        merged: dict[str, int] = {}
+        field_types = {f.name: f.type for f in dataclasses.fields(cls)}
+        merged: dict[str, int | float] = {}
         for path in (defaults_path, local_path):
             if not path.exists():
                 continue
             data = yaml.safe_load(path.read_text()) or {}
             for k, v in data.items():
-                if k not in valid:
+                if k not in field_types:
                     print(f"[freebusy.py] {path.name}: unknown weight key {k!r}, ignoring", file=sys.stderr)
                     continue
-                merged[k] = int(v)
+                # Cast YAML scalar to the dataclass field's declared type.
+                caster = float if field_types[k] == "float" else int
+                merged[k] = caster(v)
         return cls(**merged)
 
 DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -632,6 +640,7 @@ def score_slot(
     work_end: dt.time,
     *,
     attendees: list[str] | None = None,
+    required_attendees: set[str] | None = None,
     attendee_timezones: dict[str, str] | None = None,
     attendee_timezone_exceptions: list[dict] | None = None,
     outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
@@ -654,9 +663,17 @@ def score_slot(
     score = 100
 
     for c in conflicts:
-        penalty = (10 - c["conflict"]["movability"]) * weights.conflict_movability_multiplier
+        is_optional = (
+            required_attendees is not None
+            and c["attendee"].lower() not in required_attendees
+        )
+        base_penalty = (10 - c["conflict"]["movability"]) * weights.conflict_movability_multiplier
+        penalty = int(round(base_penalty * weights.optional_attendee_penalty_multiplier)) if is_optional else base_penalty
         score -= penalty
-        breakdown.append({"label": f"conflict: {c['attendee']} ({c['conflict']['category']})", "delta": -penalty})
+        label = f"conflict: {c['attendee']} ({c['conflict']['category']})"
+        if is_optional:
+            label += " [optional]"
+        breakdown.append({"label": label, "delta": -penalty})
 
         # High-frequency recurring conflicts get a bonus: easier to skip one
         # instance when the series happens often.
@@ -792,6 +809,7 @@ def find_candidate_slots(
     step: dt.timedelta = dt.timedelta(minutes=15),
     *,
     attendees: list[str] | None = None,
+    required_attendees: set[str] | None = None,
     attendee_timezones: dict[str, str] | None = None,
     attendee_timezone_exceptions: list[dict] | None = None,
     outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
@@ -828,6 +846,7 @@ def find_candidate_slots(
         scoring = score_slot(
             cursor, slot_end, conflicts, wh_start, wh_end,
             attendees=attendees,
+            required_attendees=required_attendees,
             attendee_timezones=attendee_timezones,
             attendee_timezone_exceptions=attendee_timezone_exceptions,
             outcomes_aggregated=outcomes_aggregated,
@@ -891,7 +910,8 @@ def dedup_and_rank(slots: list[dict], top_n: int) -> list[dict]:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--emails", required=True, help="Comma-separated attendee emails")
+    p.add_argument("--emails", required=True, help="Comma-separated attendee emails (required attendees)")
+    p.add_argument("--optional", default="", help="Comma-separated optional-attendee emails. Their calendars are still queried, but conflicts apply a reduced penalty (see optional_attendee_penalty_multiplier in score_weights.yaml).")
     p.add_argument("--start", required=True, help="ISO 8601, e.g. 2026-05-14T09:00")
     p.add_argument("--end", required=True, help="ISO 8601 (exclusive)")
     p.add_argument("--duration", type=int, required=True, help="Slot duration in minutes")
@@ -902,7 +922,10 @@ def main() -> None:
     p.add_argument("--config", type=Path, default=CONFIG_FILE, help=f"Path to config.yaml (default {CONFIG_FILE})")
     args = p.parse_args()
 
-    emails = [e.strip() for e in args.emails.split(",") if e.strip()]
+    required_list = [e.strip() for e in args.emails.split(",") if e.strip()]
+    optional_list = [e.strip() for e in args.optional.split(",") if e.strip()]
+    emails = required_list + [e for e in optional_list if e not in required_list]
+    required_attendees = {e.lower() for e in required_list}
     start = dt.datetime.fromisoformat(args.start).astimezone()
     end = dt.datetime.fromisoformat(args.end).astimezone()
     duration = dt.timedelta(minutes=args.duration)
@@ -938,6 +961,7 @@ def main() -> None:
     all_slots = find_candidate_slots(
         busy_by_email, start, end, duration, working_hours,
         attendees=emails,
+        required_attendees=required_attendees,
         attendee_timezones=attendee_timezones,
         attendee_timezone_exceptions=attendee_timezone_exceptions,
         outcomes_aggregated=outcomes_aggregated,
@@ -948,6 +972,8 @@ def main() -> None:
 
     output = {
         "attendees": emails,
+        "required_attendees": sorted(required_attendees),
+        "optional_attendees": sorted(e.lower() for e in optional_list if e.lower() not in required_attendees),
         "range": {"start": start.isoformat(), "end": end.isoformat()},
         "duration_minutes": args.duration,
         "config_path": str(args.config) if args.config.exists() else f"{args.config} (using defaults)",
