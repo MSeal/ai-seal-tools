@@ -70,6 +70,7 @@ TOKEN_FILE = CREDENTIALS_DIR / "google_token.json"
 SKILL_CONFIG_DIR = CONFIG_DIR / "find-meeting-time"
 CONFIG_FILE = SKILL_CONFIG_DIR / "config.yaml"
 PREFERENCES_FILE = SKILL_CONFIG_DIR / "preferences.md"
+OUTCOMES_FILE = SKILL_CONFIG_DIR / "outcomes.jsonl"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCORE_WEIGHTS_FILE = SCRIPT_DIR / "score_weights.yaml"
@@ -100,6 +101,15 @@ class ScoreWeights:
     # back per qualifying conflict.
     recurring_skippable_threshold: int = 3
     recurring_skippable_bonus: int = 5
+    # Learned movability adjustment from outcomes.jsonl. For each
+    # (event-fingerprint, attendee) tuple, recorded past outcomes shift
+    # the per-conflict score: "moved" outcomes add credit (easier to ask
+    # again), "declined" outcomes subtract (don't push it). Clamped to
+    # ±learned_max_adjustment so a single attendee's history can't
+    # dominate the structural ranking.
+    learned_moved_bonus_per: int = 2
+    learned_declined_penalty_per: int = 3
+    learned_max_adjustment: int = 8
 
     @classmethod
     def load(
@@ -220,6 +230,73 @@ def load_attendee_timezone_exceptions(path: Path = CONFIG_FILE) -> list[dict]:
         except (KeyError, ValueError, TypeError) as e:
             print(f"[freebusy.py] skipping malformed tz exception {entry!r}: {e}", file=sys.stderr)
     return parsed
+
+
+def event_fingerprint(event: dict) -> str:
+    """Stable key for matching outcomes across runs.
+
+    For recurring events the recurringEventId is highly stable across instances
+    so we use it directly. For one-offs we hash the (summary, sorted attendee
+    emails) tuple — fragile if the meeting gets renamed or attendees shuffle,
+    but the best we can do without the API exposing a stable ID for one-offs.
+    """
+    if rec_id := event.get("recurringEventId"):
+        return f"rec::{rec_id}"
+    summary = event.get("summary") or ""
+    attendees = sorted(
+        a.get("email", "").lower() for a in event.get("attendees", []) if a.get("email")
+    )
+    return f"oneoff::{summary}::{','.join(attendees)}"
+
+
+def load_outcomes(path: Path = OUTCOMES_FILE) -> dict[tuple[str, str], dict[str, int]]:
+    """Read outcomes.jsonl and aggregate per (event_fingerprint, attendee).
+
+    Returns dict keyed by (fingerprint, lowercased_email) → counter dict:
+        {"moved": int, "declined": int, "scheduled": int, ...,
+         "last_outcome": str, "last_ts": str}
+
+    Malformed lines are skipped with a stderr note rather than failing the
+    whole run. Empty file or missing path returns an empty dict.
+    """
+    out: dict[tuple[str, str], dict[str, int | str]] = {}
+    if not path.exists():
+        return out
+    for line_num, line in enumerate(path.read_text().splitlines(), start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            rec = json.loads(line)
+            fingerprint = rec["event_fingerprint"]
+            attendee = str(rec["attendee"]).lower()
+            outcome = rec["outcome"]
+            ts = rec.get("ts", "")
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            print(f"[freebusy.py] outcomes.jsonl line {line_num} malformed, skipping: {e}", file=sys.stderr)
+            continue
+        key = (fingerprint, attendee)
+        agg = out.setdefault(key, {})
+        agg[outcome] = int(agg.get(outcome, 0)) + 1
+        # Track the most-recent timestamp so Claude can see "last asked X ago"
+        if ts >= str(agg.get("last_ts", "")):
+            agg["last_ts"] = ts
+            agg["last_outcome"] = outcome
+    return out  # type: ignore[return-value]
+
+
+def _learned_adjustment(
+    agg: dict[str, int | str] | None, weights: ScoreWeights
+) -> tuple[int, dict[str, int] | None]:
+    """Compute the score delta + counts to surface in breakdown."""
+    if not agg:
+        return 0, None
+    counts = {k: v for k, v in agg.items() if isinstance(v, int)}
+    moved = counts.get("moved", 0) + counts.get("agreed", 0)
+    declined = counts.get("declined", 0)
+    delta = moved * weights.learned_moved_bonus_per - declined * weights.learned_declined_penalty_per
+    delta = max(-weights.learned_max_adjustment, min(weights.learned_max_adjustment, delta))
+    return delta, counts
 
 
 def _effective_tz_for(
@@ -459,6 +536,7 @@ def classify_event(event: dict, *, series_counts: dict[str, int] | None = None) 
         "recurring": recurring,
         "recurring_event_id": recurring_event_id,
         "frequency_in_window": frequency_in_window,
+        "fingerprint": event_fingerprint(event),
         "visible": visible,
         "summary": summary,
         "attendee_count": len(attendees),
@@ -541,6 +619,7 @@ def score_slot(
     attendees: list[str] | None = None,
     attendee_timezones: dict[str, str] | None = None,
     attendee_timezone_exceptions: list[dict] | None = None,
+    outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
     weights: ScoreWeights | None = None,
 ) -> dict:
     """Return {score, breakdown} for a candidate slot.
@@ -573,6 +652,18 @@ def score_slot(
                 "label": f"recurring & frequent: {c['attendee']} ({freq}× in window)",
                 "delta": bonus,
             })
+
+        # Learned adjustment from outcomes.jsonl history for this (event, attendee).
+        if outcomes_aggregated and (fp := c["conflict"].get("fingerprint")):
+            agg = outcomes_aggregated.get((fp, c["attendee"].lower()))
+            delta, counts = _learned_adjustment(agg, weights)
+            if delta != 0 and counts:
+                score += delta
+                counts_summary = ", ".join(f"{k}:{v}" for k, v in counts.items() if v > 0)
+                breakdown.append({
+                    "label": f"learned: {c['attendee']} / {c['conflict'].get('summary') or 'opaque'} ({counts_summary})",
+                    "delta": delta,
+                })
 
     local = cursor.astimezone()
     local_end = slot_end.astimezone()
@@ -626,9 +717,17 @@ def score_slot(
     return {"score": score, "breakdown": breakdown}
 
 
-def make_ask_context(attendee: str, conflict_block: tuple[dt.datetime, dt.datetime, dict]) -> dict:
+def make_ask_context(
+    attendee: str,
+    conflict_block: tuple[dt.datetime, dt.datetime, dict],
+    outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
+) -> dict:
     """Structured per-conflict data the skill renders into ask-messages."""
     start, end, cls = conflict_block
+    history: dict | None = None
+    if outcomes_aggregated and (fp := cls.get("fingerprint")):
+        if (agg := outcomes_aggregated.get((fp, attendee.lower()))):
+            history = dict(agg)  # shallow copy so callers don't mutate
     return {
         "attendee": attendee,
         "conflict": {
@@ -639,6 +738,8 @@ def make_ask_context(attendee: str, conflict_block: tuple[dt.datetime, dt.dateti
             "recurring": cls["recurring"],
             "recurring_event_id": cls.get("recurring_event_id"),
             "frequency_in_window": cls.get("frequency_in_window", 1),
+            "fingerprint": cls.get("fingerprint"),
+            "outcome_history": history,
             "status": cls["status"],
             "is_all_day": cls["is_all_day"],
             "attendee_count": cls["attendee_count"],
@@ -659,6 +760,7 @@ def find_candidate_slots(
     attendees: list[str] | None = None,
     attendee_timezones: dict[str, str] | None = None,
     attendee_timezone_exceptions: list[dict] | None = None,
+    outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
     weights: ScoreWeights | None = None,
 ) -> list[dict]:
     """Slide a duration-sized window through [start, end] within each day's
@@ -685,7 +787,7 @@ def find_candidate_slots(
         for email, blocks in busy_by_email.items():
             for b_start, b_end, cls in blocks:
                 if b_start < slot_end and b_end > cursor:
-                    conflicts.append(make_ask_context(email, (b_start, b_end, cls)))
+                    conflicts.append(make_ask_context(email, (b_start, b_end, cls), outcomes_aggregated))
                     break  # one conflict per attendee per slot is enough
 
         scoring = score_slot(
@@ -693,6 +795,7 @@ def find_candidate_slots(
             attendees=attendees,
             attendee_timezones=attendee_timezones,
             attendee_timezone_exceptions=attendee_timezone_exceptions,
+            outcomes_aggregated=outcomes_aggregated,
             weights=weights,
         )
         slots.append({
@@ -792,6 +895,7 @@ def main() -> None:
 
     attendee_timezones = load_attendee_timezones(args.config)
     attendee_timezone_exceptions = load_attendee_timezone_exceptions(args.config)
+    outcomes_aggregated = load_outcomes()
     weights = ScoreWeights.load()
     busy_by_email = build_busy_map(events_by_email)
     all_slots = find_candidate_slots(
@@ -799,6 +903,7 @@ def main() -> None:
         attendees=emails,
         attendee_timezones=attendee_timezones,
         attendee_timezone_exceptions=attendee_timezone_exceptions,
+        outcomes_aggregated=outcomes_aggregated,
         weights=weights,
     )
     top_slots = dedup_and_rank(all_slots, args.top)
@@ -809,6 +914,8 @@ def main() -> None:
         "duration_minutes": args.duration,
         "config_path": str(args.config) if args.config.exists() else f"{args.config} (using defaults)",
         "preferences_path": str(PREFERENCES_FILE) if PREFERENCES_FILE.exists() else None,
+        "outcomes_path": str(OUTCOMES_FILE) if OUTCOMES_FILE.exists() else None,
+        "outcomes_loaded": sum(sum(v for v in agg.values() if isinstance(v, int)) for agg in outcomes_aggregated.values()),
         "score_weights": dataclasses.asdict(weights),
         "working_hours": {d: f"{ws.isoformat(timespec='minutes')}-{we.isoformat(timespec='minutes')}" for d, (ws, we) in working_hours.items()},
         "attendee_timezones": attendee_timezones,

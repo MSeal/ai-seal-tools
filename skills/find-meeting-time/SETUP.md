@@ -315,6 +315,30 @@ attendee_tz_outside_hours: 40    # TZ mismatch is a strong signal for me
 Every helper run echoes the effective weights into the output JSON under
 `score_weights`, so you can confirm what actually got loaded.
 
+### `outcomes.jsonl` — the learned-from-experience log
+
+When the user reports back on an ask ("Alice agreed to move", "Bob declined"),
+Claude appends one JSON record per outcome to `outcomes.jsonl` via
+`record_outcome.py`. Subsequent `freebusy.py` runs aggregate the log per
+`(event_fingerprint, attendee)` tuple and shift the per-conflict score:
+each `moved`/`agreed` outcome credits back `learned_moved_bonus_per` points,
+each `declined` outcome deducts `learned_declined_penalty_per`. The net is
+clamped to `±learned_max_adjustment`. All three knobs live in
+`score_weights.yaml`.
+
+File location is the same Drive-backed personal-config dir as `preferences.md`
+(so learnings sync across machines) with a symlink at
+`config.local/find-meeting-time/outcomes.jsonl` for editor inspection. It's
+gitignored. Inspect with:
+
+```bash
+tail -f config.local/find-meeting-time/outcomes.jsonl
+```
+
+Each line is one record: `{ts, attendee, outcome, event_fingerprint,
+summary?, note?}`. Edit or delete entries by hand if needed — the loader
+re-aggregates on every helper run.
+
 ### `preferences.md` — what Claude reads
 
 Free-form prose. Claude reads the whole file when ranking slots and

@@ -851,6 +851,196 @@ def test_score_slot_bonus_applies_per_conflict():
     assert len(bonuses) == 2
 
 
+# ---------------------------------------------------------------------------
+# Calendar pattern memory: fingerprint, outcomes.jsonl, learned adjustment
+# ---------------------------------------------------------------------------
+
+def test_event_fingerprint_recurring_uses_event_id():
+    """Recurring events are keyed by their recurringEventId — stable across
+    instances regardless of title rename or attendee shuffle."""
+    fp = fb.event_fingerprint(_ev(summary="Weekly", recurring=True, recurring_event_id="abc123"))
+    assert fp == "rec::abc123"
+
+
+def test_event_fingerprint_one_off_uses_summary_and_sorted_attendees():
+    """One-offs hash (summary, sorted attendee emails). Sort means attendee
+    order doesn't change the fingerprint."""
+    fp_a = fb.event_fingerprint({
+        "summary": "Quick chat",
+        "start": {"dateTime": "2026-05-20T10:00:00-07:00"},
+        "end":   {"dateTime": "2026-05-20T11:00:00-07:00"},
+        "attendees": [{"email": "alice@x"}, {"email": "bob@x"}],
+    })
+    fp_b = fb.event_fingerprint({
+        "summary": "Quick chat",
+        "start": {"dateTime": "2026-05-20T10:00:00-07:00"},
+        "end":   {"dateTime": "2026-05-20T11:00:00-07:00"},
+        "attendees": [{"email": "bob@x"}, {"email": "alice@x"}],  # reversed
+    })
+    assert fp_a == fp_b == "oneoff::Quick chat::alice@x,bob@x"
+
+
+def test_event_fingerprint_one_off_attendees_lowercased():
+    """Mixed-case emails fingerprint the same as lowercase — calendar API
+    sometimes returns mixed-case for display."""
+    fp = fb.event_fingerprint({
+        "summary": "Sync",
+        "start": {"dateTime": "2026-05-20T10:00:00-07:00"},
+        "end":   {"dateTime": "2026-05-20T11:00:00-07:00"},
+        "attendees": [{"email": "Alice@X"}],
+    })
+    assert fp == "oneoff::Sync::alice@x"
+
+
+def test_classify_event_emits_fingerprint():
+    """The classification dict carries the fingerprint so downstream code
+    (score_slot, make_ask_context) can do outcome lookups."""
+    cls = fb.classify_event(_ev(summary="Weekly", recurring=True, recurring_event_id="rec-xyz"))
+    assert cls["fingerprint"] == "rec::rec-xyz"
+
+
+def test_load_outcomes_missing_file(tmp_path):
+    """No log file → empty aggregate."""
+    assert fb.load_outcomes(tmp_path / "no.jsonl") == {}
+
+
+def test_load_outcomes_aggregates_per_attendee_and_event(tmp_path):
+    """Multiple records aggregate into counters keyed by (fingerprint, email)."""
+    log = tmp_path / "outcomes.jsonl"
+    log.write_text(
+        '{"ts": "2026-05-01T10:00:00-07:00", "attendee": "alice@x", "outcome": "moved", "event_fingerprint": "rec::abc"}\n'
+        '{"ts": "2026-05-08T10:00:00-07:00", "attendee": "alice@x", "outcome": "moved", "event_fingerprint": "rec::abc"}\n'
+        '{"ts": "2026-05-15T10:00:00-07:00", "attendee": "alice@x", "outcome": "declined", "event_fingerprint": "rec::abc"}\n'
+        '{"ts": "2026-05-01T10:00:00-07:00", "attendee": "bob@x", "outcome": "moved", "event_fingerprint": "rec::abc"}\n'
+    )
+    out = fb.load_outcomes(log)
+    assert out[("rec::abc", "alice@x")] == {
+        "moved": 2,
+        "declined": 1,
+        "last_ts": "2026-05-15T10:00:00-07:00",
+        "last_outcome": "declined",
+    }
+    assert out[("rec::abc", "bob@x")] == {
+        "moved": 1,
+        "last_ts": "2026-05-01T10:00:00-07:00",
+        "last_outcome": "moved",
+    }
+
+
+def test_load_outcomes_skips_malformed_lines(tmp_path, capsys):
+    """A bad JSON line or a record missing required fields is skipped
+    with a stderr note, not allowed to crash the load."""
+    log = tmp_path / "outcomes.jsonl"
+    log.write_text(
+        '{"ts": "2026-05-01T10:00:00-07:00", "attendee": "alice@x", "outcome": "moved", "event_fingerprint": "rec::abc"}\n'
+        'not json at all\n'
+        '{"missing": "fields"}\n'
+        '\n'
+        '# a comment line\n'
+        '{"ts": "2026-05-15T10:00:00-07:00", "attendee": "bob@x", "outcome": "moved", "event_fingerprint": "rec::abc"}\n'
+    )
+    out = fb.load_outcomes(log)
+    assert len(out) == 2
+    err = capsys.readouterr().err
+    assert "malformed" in err
+
+
+def test_score_slot_learned_bonus_for_repeated_moves():
+    """A conflict against an event/attendee with prior 'moved' outcomes gets
+    a positive score adjustment (defaults: 2 per move, capped at 8)."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 5, "category": "team_meeting", "fingerprint": "rec::ABC",
+                     "summary": "Platform sync", "recurring": True, "frequency_in_window": 1},
+    }]
+    outcomes = {("rec::ABC", "alice@x"): {"moved": 2, "last_outcome": "moved"}}
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           outcomes_aggregated=outcomes)
+    # Base penalty (10-5)*5 = 25; learned bonus 2*2 = +4; net -21; score 79
+    assert result["score"] == 79
+    learned = [b for b in result["breakdown"] if b["label"].startswith("learned:")]
+    assert len(learned) == 1
+    assert learned[0]["delta"] == 4
+    assert "moved:2" in learned[0]["label"]
+
+
+def test_score_slot_learned_penalty_for_declined():
+    """A conflict against a (fingerprint, attendee) with a 'declined' history
+    gets a NEGATIVE learned adjustment — don't keep proposing what they've
+    already shot down."""
+    conflicts = [{
+        "attendee": "bob@x",
+        "conflict": {"movability": 8, "category": "one_on_one", "fingerprint": "rec::XYZ",
+                     "summary": "Bob 1:1", "recurring": True, "frequency_in_window": 1},
+    }]
+    outcomes = {("rec::XYZ", "bob@x"): {"declined": 2, "last_outcome": "declined"}}
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           outcomes_aggregated=outcomes)
+    # Base penalty (10-8)*5 = 10; learned penalty -2*3 = -6; net -16; score 84
+    assert result["score"] == 84
+    learned = [b for b in result["breakdown"] if b["label"].startswith("learned:")]
+    assert learned[0]["delta"] == -6
+    assert "declined:2" in learned[0]["label"]
+
+
+def test_score_slot_learned_adjustment_clamped_to_max():
+    """A pile of past moves can't shift the conflict beyond ±learned_max_adjustment."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 0, "category": "ooo", "fingerprint": "rec::ABC",
+                     "summary": "OOO", "recurring": True, "frequency_in_window": 1},
+    }]
+    outcomes = {("rec::ABC", "alice@x"): {"moved": 99, "last_outcome": "moved"}}
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           outcomes_aggregated=outcomes)
+    learned = [b for b in result["breakdown"] if b["label"].startswith("learned:")]
+    # 99 moves × 2 = 198, but clamped to learned_max_adjustment=8
+    assert learned[0]["delta"] == 8
+
+
+def test_score_slot_no_learned_entry_no_adjustment():
+    """A conflict with a fingerprint that has no matching outcomes → no
+    learned breakdown line."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 5, "category": "team_meeting", "fingerprint": "rec::NEW",
+                     "summary": "Fresh meeting", "recurring": True, "frequency_in_window": 1},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           outcomes_aggregated={("rec::OTHER", "alice@x"): {"moved": 99}})
+    assert all(not b["label"].startswith("learned:") for b in result["breakdown"])
+
+
+def test_make_ask_context_surfaces_outcome_history():
+    """make_ask_context attaches the (fingerprint, attendee) outcome counter
+    onto the conflict dict so Claude can cite it in messages."""
+    ev = _ev(summary="Weekly", recurring=True, recurring_event_id="rec-W")
+    cls = fb.classify_event(ev)
+    start = _dt("2026-05-20T10:00:00-07:00")
+    end = _dt("2026-05-20T10:30:00-07:00")
+    outcomes = {("rec::rec-W", "alice@x"): {"moved": 3, "declined": 1, "last_outcome": "moved"}}
+    ctx = fb.make_ask_context("alice@x", (start, end, cls), outcomes)
+    assert ctx["conflict"]["outcome_history"] == {"moved": 3, "declined": 1, "last_outcome": "moved"}
+
+
+def test_make_ask_context_no_history_returns_none():
+    """No matching outcomes → outcome_history is None (Claude knows to not cite)."""
+    ev = _ev(summary="Weekly", recurring=True, recurring_event_id="rec-NEW")
+    cls = fb.classify_event(ev)
+    start = _dt("2026-05-20T10:00:00-07:00")
+    end = _dt("2026-05-20T10:30:00-07:00")
+    ctx = fb.make_ask_context("alice@x", (start, end, cls), outcomes_aggregated={})
+    assert ctx["conflict"]["outcome_history"] is None
+
+
 def test_score_slot_custom_threshold_and_bonus():
     """Threshold and bonus are configurable via ScoreWeights."""
     w = fb.ScoreWeights(recurring_skippable_threshold=5, recurring_skippable_bonus=15)

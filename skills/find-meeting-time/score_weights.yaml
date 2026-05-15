@@ -36,3 +36,15 @@ attendee_tz_outside_hours: 20
 # per qualifying conflict. Set bonus to 0 to disable.
 recurring_skippable_threshold: 3
 recurring_skippable_bonus: 5
+
+# Learned movability adjustment from outcomes.jsonl. For each
+# (event-fingerprint, attendee) tuple in the outcomes log, recorded
+# past outcomes shift the per-conflict score:
+#   - each "moved" or "agreed" outcome adds learned_moved_bonus_per
+#   - each "declined" outcome subtracts learned_declined_penalty_per
+# Net delta is clamped to ±learned_max_adjustment so a single attendee's
+# history can't dominate the structural ranking. Set learned_max_adjustment
+# to 0 to disable the learned signal entirely (history is still logged).
+learned_moved_bonus_per: 2
+learned_declined_penalty_per: 3
+learned_max_adjustment: 8

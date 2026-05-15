@@ -108,6 +108,33 @@ Key points:
   - `frequency_in_window >= 4` in a 2-week window → weekly or more frequent. Phrase asks as "could we skip this week's instance?" — the attendee has many more chances.
   - `frequency_in_window == 1` for a recurring event → monthly cadence or rarer. Phrase asks as "could we move it?" — skipping costs them a month of catch-up.
   - For one-offs (`recurring: false`, `frequency_in_window: 1`), don't make recurrence-based assumptions — just refer to the event by title.
+- `conflict.outcome_history` is the per-(event, attendee) record of past asks from `outcomes.jsonl`. When non-null, it has counts like `{"moved": 3, "declined": 1, "last_outcome": "moved"}`. Use it to:
+  - Cite track record in ask-messages: "We've moved this twice already this year — happy to do the rescheduling work again."
+  - Soften repeat declines: if `declined >= 2`, don't keep asking the same way. Propose a different slot or a different attendee.
+  - The helper already applies a score adjustment (`learned: ... ±N` line in `score_breakdown`); your job is to phrase the message in light of the history, not redo the math.
+
+## Logging outcomes after an ask
+
+After the user reports back on how an ask went, log the outcome with `record_outcome.py` so future runs learn from it:
+
+```bash
+uv run --script skills/find-meeting-time/record_outcome.py \
+  --attendee <attendee-email> \
+  --outcome <moved|agreed|declined|scheduled|skipped> \
+  --event-fingerprint <fingerprint-from-conflict> \
+  [--summary "<event title>"] \
+  [--note "<free-form context>"]
+```
+
+When to log:
+- User says "Alice agreed to move" → log `moved` (or `agreed`; same effect)
+- User says "Bob said no" → log `declined`
+- User confirms they're scheduling the meeting at a slot → optionally log `scheduled` for each conflict, useful for audit
+- User picks a different slot without asking → log nothing (no signal)
+
+The `event-fingerprint` is the `fingerprint` field from the conflict you discussed. Pass it directly; don't try to reconstruct.
+
+Default: log proactively when the outcome is obvious from the user's message. Don't ask permission to log — the user can `tail -f config.local/find-meeting-time/outcomes.jsonl` to inspect history, or delete bad entries by editing the file.
 - Each entry in `conflicts` is an *ask-context*: enough structured data for you to compose a pre-formatted message to that attendee.
 
 ## Personal preferences — read `preferences.md` before ranking
