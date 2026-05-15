@@ -163,6 +163,111 @@ the colleague taking any action.
 
 ---
 
+## Credential layout
+
+Auth files (`google_oauth_client.json`, `google_token.json`, and any
+future `google_service_account.json`) live at the **parent** dir
+`~/.config/ai-seal-tools/`, **not** under any per-skill subdirectory.
+This is deliberate:
+
+- The per-skill subdirectory `find-meeting-time/` is Drive-synced (see
+  next section), and credentials must never leave the local machine.
+- Each machine should mint and refresh its own OAuth token. Sharing a
+  refresh token across machines causes Google to invalidate one when
+  another refreshes.
+- Future skills that need Google API access should reuse the same
+  client/token (adding scopes as needed) rather than creating their own
+  per-skill credential files. Keeps the OAuth surface to one client.
+
+Permissions on all credential files **must be 0600**. The helper writes
+the token atomically with that mode on every refresh; on a fresh
+install, when you stage the OAuth client JSON manually, set perms
+yourself:
+
+```bash
+chmod 600 ~/.config/ai-seal-tools/google_oauth_client.json
+```
+
+## Personal config
+
+The skill reads two optional personal files. The real files live in
+**Google Drive Desktop sync** so preferences persist across machines
+without extra code. Two layers of symlinks point at the Drive target:
+
+```
+~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/
+   My Drive/ai-seal-tools/find-meeting-time/
+     config.yaml        ← real file (synced by Drive Desktop)
+     preferences.md     ← real file (synced by Drive Desktop)
+                              ▲
+                              │ symlinks
+                              │
+~/.config/ai-seal-tools/find-meeting-time/
+     config.yaml        → Drive (helper script reads from here)
+     preferences.md     → Drive
+                              ▲
+                              │ symlinks
+                              │
+<repo>/config.local/find-meeting-time/
+     config.yaml        → Drive (editor convenience)
+     preferences.md     → Drive
+```
+
+Both files are created automatically the first time you run
+`utils/install_skills.py`. Existing files at the old `~/.config/`-only
+path get migrated to Drive on first run after this upgrade.
+
+**On a new machine:** install Google Drive Desktop, sign in as
+`mseal@confluent.io`, wait for the `ai-seal-tools/` folder to sync into
+`~/Library/CloudStorage/...`, then run `uv run utils/install_skills.py`.
+The installer detects the synced files and creates the symlinks pointing
+at them; no manual file copy needed.
+
+The Drive target paths are declared in
+`skills/find-meeting-time/links.yaml` — if your Drive account email
+differs, edit the `target:` lines there.
+
+### `config.yaml` — what the helper needs
+
+Minimal — the helper consults this only for **working hours**, which
+determine the slot search space. Everything else (lunch, day-of-week bias,
+defended blocks, etc.) lives in `preferences.md` as prose for Claude.
+
+```yaml
+working_hours:
+  default: "09:00-17:00"
+  # Per-day overrides — uncomment to use:
+  # monday:  "10:00-17:00"     # late start Monday
+  # friday:  "09:00-15:00"     # early end Friday
+```
+
+CLI overrides for one-off queries:
+
+```bash
+uv run --script .../freebusy.py [...] \
+  --work-start 10:00 --work-end 18:00 \
+  --config /path/to/other-config.yaml
+```
+
+### `preferences.md` — what Claude reads
+
+Free-form prose. Claude reads the whole file when ranking slots and
+composing ask-messages. Quotable sentences become the explanation Claude
+cites when applying a preference, so be specific.
+
+Use sections like:
+- **Defended time** — blocks you protect, with conditions under which they
+  can be overridden ("Tue/Thu 9–11 PT deep work unless every alternative
+  this week is worse")
+- **Day-of-week preferences** — Mondays for focus, Friday afternoons as
+  buffer, etc.
+- **People** — per-person notes: whose conflicts move easily, who's in
+  multiple timezones, individual quirks
+- **Ask-message tone** — how to write to peers vs. senior folks vs. external
+
+There's no schema — add or remove sections as you like. A starter template
+is created on first install.
+
 ## Troubleshooting
 
 Each entry: symptom → diagnosis → fix.

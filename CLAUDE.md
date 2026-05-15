@@ -9,6 +9,10 @@ Personal AI exploration repo. The goal is to build utilities, skills, and agents
 - **Real value only.** A tool that saves 5 minutes a week earns its place. One that takes longer to invoke than doing the thing manually doesn't.
 - **Composable over monolithic.** Small focused scripts/agents that pipe into each other beat one big framework.
 
+## Commits
+
+Don't create a git commit without explicit permission. Permission is scoped to a single commit by default — even after a "yes, commit" approval, ask again before the next commit unless the user indicates a wider scope (e.g., "commit freely in this session", "commit each time you reach a stable point", or a similar broadening). Soft-resetting a commit doesn't grant permission to re-commit — wait for the user.
+
 ## Structure
 
 ```
@@ -19,6 +23,10 @@ prompts/      # Reusable prompt templates
 ```
 
 Create the relevant directory when adding the first file in a new category.
+
+## Scratch directory
+
+`scratch/` (gitignored) is where temporary working files go — draft outputs for human review, intermediate notes, generated artifacts that aren't repo deliverables. When the user asks for something to be "written to a file" for review (or there's an output that's worth persisting beyond the conversation but doesn't belong in version control), drop it in `scratch/`. Don't put anything there that's intended to be committed; if it turns out to be a real artifact, move it into the appropriate tracked directory.
 
 ## Tech Stack
 

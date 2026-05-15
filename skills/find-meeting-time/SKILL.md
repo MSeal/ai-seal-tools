@@ -1,6 +1,6 @@
 ---
 name: find-meeting-time
-description: Find the best time to meet with a set of company colleagues by inspecting Google Calendar availability. Surfaces ranked slots with quality scores, classifies conflicting events by how movable they are (focus blocks → easy; customer meetings → hard), and renders a pre-formatted ask-message for each conflict so the user can decide whether to ping the conflicting attendee before committing. Two execution paths: an API path via freebusy.py (preferred, uses calendar.events.readonly scope — see SETUP.md) and a Playwright browser fallback. Argument is a free-form description of the meeting (attendees, duration, date range).
+description: Find the best time to meet with a set of company colleagues by inspecting Google Calendar availability. Surfaces ranked slots with quality scores, classifies conflicting events by how movable they are (focus blocks → easy; customer meetings → hard), respects personal scheduling preferences (engine-level config in `~/.config/ai-seal-tools/find-meeting-time/config.yaml`; subjective prose preferences in `preferences.md` alongside it), and renders a pre-formatted ask-message for each conflict so the user can decide whether to ping the conflicting attendee before committing. Two execution paths: an API path via freebusy.py (preferred, uses calendar.events.readonly scope — see SETUP.md) and a Playwright browser fallback. Argument is a free-form description of the meeting (attendees, duration, date range).
 ---
 
 # Find Meeting Time
@@ -98,10 +98,29 @@ If the description is too ambiguous to act on (no attendees, or a window that's 
 ```
 
 Key points:
-- `ranked_slots` is pre-sorted by score (descending) and deduped (no two slots overlap).
-- `score` is 0–100. Base is 100; conflicts subtract `(10 - movability) × 5`; time-of-day issues subtract 5–10.
-- `score_breakdown` lists every penalty applied. Use this to explain rankings rather than just emit a number.
+- `ranked_slots` is pre-sorted by score (descending) and deduped (no two slots overlap, no two share the same conflict signature).
+- `score` is 0–100. Base is 100; conflicts subtract `(10 - movability) × 5`; structural penalties (lunch overlap, day-edges) subtract 5–10. The helper applies **only structural penalties** — subjective rules come from `preferences.md` (see next section).
+- `score_breakdown` lists every structural penalty. Use the labels to explain rankings rather than just emit a number.
+- `config_path` and `preferences_path` indicate which personal config files (if any) are in play for this run.
 - Each entry in `conflicts` is an *ask-context*: enough structured data for you to compose a pre-formatted message to that attendee.
+
+## Personal preferences — read `preferences.md` before ranking
+
+After the helper returns and **before** writing the final user-facing answer, read `preferences.md` if `preferences_path` in the helper output is non-null:
+
+```
+Read(preferences_path)
+```
+
+The file is free-form prose. Apply it as follows:
+
+1. **Re-rank.** The helper's score is a starting point based on structural rules only. The user's prose may reorder slots — e.g., "Mondays are recovery days" pushes Monday slots down; "Tue/Thu 9–11 PT is deep work" should make those slots score worse even if the helper marked them all-free.
+2. **Use exception conditions.** Preferences often have escape hatches ("...unless every alternative this week is worse"). Apply the rule literally; if the conditions trigger, lift the penalty.
+3. **Cite when applying.** When a preference changes ranking, quote (or paraphrase) the relevant sentence in user-facing output so the user can trace the decision: *"Ranked Wed lower because you said Mondays are recovery days... wait, that's Wed not Monday, ignore."* Saying the reasoning out loud helps catch mis-application too.
+4. **Use per-person notes for conflict tone.** If `preferences.md` has notes about a specific attendee (e.g., "Sorabh moves 1:1s easily"), use that to adjust the ask-message style rather than the generic template.
+5. **Use ask-tone preferences.** Apply "peers casual / senior apologetic / external formal" if the user specified.
+
+If `preferences_path` is null, the helper's structural ranking stands — use the default templates below.
 
 ## Movability categories
 

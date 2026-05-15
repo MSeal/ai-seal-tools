@@ -254,6 +254,19 @@ skills/*/.skill-env
 .claude/.credentials.json
 CLAUDE.local.md
 
+# Personal working docs (any TODO.local.md or NOTES.local.md anywhere)
+**/TODO.local.md
+**/NOTES.local.md
+
+# Scratch dir — temporary working files (draft descriptions, intermediate
+# outputs, anything generated for human review that isn't a repo artifact).
+# See CLAUDE.md "Scratch directory".
+scratch/
+
+# Personal config symlinks (created by utils/install_skills.py from each
+# skill's links.yaml). Targets live in ~/.config/ai-seal-tools/<skill>/.
+config.local/
+
 # Playwright MCP — accessibility snapshots dumped per browsing session
 .playwright-mcp/
 

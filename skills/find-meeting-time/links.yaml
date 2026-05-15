@@ -1,0 +1,27 @@
+# Symlinks created by utils/install_skills.py at install time.
+#
+# Each entry:
+#   target: absolute path to the real file. For find-meeting-time we put
+#     these inside Google Drive Desktop's sync folder so preferences and
+#     learnings persist across machines without extra code.
+#   symlinks: list of paths that should resolve to `target`. Absolute paths
+#     and ~-paths are used as-is; relative paths resolve against the repo
+#     root. Each symlink that doesn't already point at `target` gets created
+#     or re-pointed.
+#   template_if_missing: relative-to-this-skill path; if `target` doesn't
+#     exist at install time, copy this template to create it. The installer
+#     also migrates a pre-existing real file from any of the symlink paths
+#     into `target` before creating the symlinks (so upgrading from a
+#     ~/.config-only setup is non-destructive).
+
+- target: ~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/My Drive/ai-seal-tools/find-meeting-time/config.yaml
+  symlinks:
+    - ~/.config/ai-seal-tools/find-meeting-time/config.yaml
+    - config.local/find-meeting-time/config.yaml
+  template_if_missing: templates/config.yaml
+
+- target: ~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/My Drive/ai-seal-tools/find-meeting-time/preferences.md
+  symlinks:
+    - ~/.config/ai-seal-tools/find-meeting-time/preferences.md
+    - config.local/find-meeting-time/preferences.md
+  template_if_missing: templates/preferences.md
