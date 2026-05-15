@@ -84,6 +84,8 @@ If the description is too ambiguous to act on (no attendees, or a window that's 
             "category": "one_on_one",
             "movability": 8,
             "recurring": true,
+            "recurring_event_id": "abc123_R20260521T170000",
+            "frequency_in_window": 4,
             "status": "confirmed",
             "is_all_day": false,
             "attendee_count": 2,
@@ -102,6 +104,10 @@ Key points:
 - `score` is 0–100. Base is 100; conflicts subtract `(10 - movability) × 5`; structural penalties (lunch overlap, day-edges) subtract 5–10. The helper applies **only structural penalties** — subjective rules come from `preferences.md` (see next section).
 - `score_breakdown` lists every structural penalty. Use the labels to explain rankings rather than just emit a number.
 - `config_path` and `preferences_path` indicate which personal config files (if any) are in play for this run.
+- `conflict.frequency_in_window` is how many times this recurring series appears in the queried window (per attendee). Use it to write ask-messages with the right tone:
+  - `frequency_in_window >= 4` in a 2-week window → weekly or more frequent. Phrase asks as "could we skip this week's instance?" — the attendee has many more chances.
+  - `frequency_in_window == 1` for a recurring event → monthly cadence or rarer. Phrase asks as "could we move it?" — skipping costs them a month of catch-up.
+  - For one-offs (`recurring: false`, `frequency_in_window: 1`), don't make recurrence-based assumptions — just refer to the event by title.
 - Each entry in `conflicts` is an *ask-context*: enough structured data for you to compose a pre-formatted message to that attendee.
 
 ## Personal preferences — read `preferences.md` before ranking

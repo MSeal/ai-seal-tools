@@ -28,6 +28,7 @@ def _ev(
     event_type="default",
     attendees=None,
     recurring=False,
+    recurring_event_id="rec123",
     all_day=False,
 ):
     ev = {"status": status, "transparency": transparency, "eventType": event_type}
@@ -42,7 +43,7 @@ def _ev(
     if attendees:
         ev["attendees"] = attendees
     if recurring:
-        ev["recurringEventId"] = "rec123"
+        ev["recurringEventId"] = recurring_event_id
     return ev
 
 
@@ -697,3 +698,192 @@ def test_score_slot_exception_without_note_omits_dangling_comma():
     assert ", None" not in label
     assert label.endswith(")")
     assert ", )" not in label
+
+
+# ---------------------------------------------------------------------------
+# Recurring frequency_in_window (task #9 — recurring/one-off signal refinement)
+# ---------------------------------------------------------------------------
+
+def test_classify_one_off_event_has_frequency_one():
+    """A non-recurring event always reports frequency_in_window=1."""
+    cls = fb.classify_event(_ev(summary="Customer call"))
+    assert cls["recurring"] is False
+    assert cls["recurring_event_id"] is None
+    assert cls["frequency_in_window"] == 1
+
+
+def test_classify_recurring_event_without_counts_defaults_to_one():
+    """Recurring event but no `series_counts` supplied → defaults to 1 (we
+    just don't know the cadence from this event alone)."""
+    cls = fb.classify_event(_ev(summary="Weekly sync", recurring=True))
+    assert cls["recurring"] is True
+    assert cls["recurring_event_id"] == "rec123"
+    assert cls["frequency_in_window"] == 1
+
+
+def test_classify_uses_series_counts_when_provided():
+    """When build_busy_map's first pass tells us a series appears N times in
+    the window, that count flows through to the classification."""
+    cls = fb.classify_event(
+        _ev(summary="Weekly sync", recurring=True, recurring_event_id="rec-abc"),
+        series_counts={"rec-abc": 4},
+    )
+    assert cls["frequency_in_window"] == 4
+
+
+def test_classify_series_counts_only_apply_to_matching_id():
+    """A series_counts entry for a different ID is ignored — each event uses
+    its own recurringEventId for the lookup."""
+    cls = fb.classify_event(
+        _ev(summary="My sync", recurring=True, recurring_event_id="rec-mine"),
+        series_counts={"rec-someone-else": 99},
+    )
+    assert cls["frequency_in_window"] == 1
+
+
+def test_build_busy_map_counts_series_instances_per_attendee():
+    """End-to-end through build_busy_map: a recurring weekly sync that
+    appears 3 times in the window gets frequency_in_window=3; a separate
+    one-off keeps 1."""
+    # Three instances of the same weekly series + one one-off
+    weekly_a = _ev(summary="Weekly", start="2026-05-20T10:00:00-07:00",
+                   end="2026-05-20T10:30:00-07:00", recurring=True,
+                   recurring_event_id="rec-weekly")
+    weekly_b = _ev(summary="Weekly", start="2026-05-27T10:00:00-07:00",
+                   end="2026-05-27T10:30:00-07:00", recurring=True,
+                   recurring_event_id="rec-weekly")
+    weekly_c = _ev(summary="Weekly", start="2026-06-03T10:00:00-07:00",
+                   end="2026-06-03T10:30:00-07:00", recurring=True,
+                   recurring_event_id="rec-weekly")
+    one_off = _ev(summary="One-off chat", start="2026-05-21T14:00:00-07:00",
+                  end="2026-05-21T15:00:00-07:00")
+    busy = fb.build_busy_map({"alice@x": [weekly_a, weekly_b, weekly_c, one_off]})
+    blocks = busy["alice@x"]
+    assert len(blocks) == 4
+    classifications_by_summary = {cls["summary"]: cls for _, _, cls in blocks}
+    assert classifications_by_summary["Weekly"]["frequency_in_window"] == 3
+    assert classifications_by_summary["One-off chat"]["frequency_in_window"] == 1
+
+
+def test_build_busy_map_counts_are_per_attendee_not_global():
+    """Two attendees attending different series with the same name should each
+    get their own per-attendee count. (Different recurringEventIds.)"""
+    alice_event = _ev(summary="Standup", recurring=True, recurring_event_id="rec-alice-standup",
+                      start="2026-05-20T09:00:00-07:00", end="2026-05-20T09:15:00-07:00")
+    bob_event_1 = _ev(summary="Standup", recurring=True, recurring_event_id="rec-bob-standup",
+                      start="2026-05-20T09:00:00-07:00", end="2026-05-20T09:15:00-07:00")
+    bob_event_2 = _ev(summary="Standup", recurring=True, recurring_event_id="rec-bob-standup",
+                      start="2026-05-21T09:00:00-07:00", end="2026-05-21T09:15:00-07:00")
+    busy = fb.build_busy_map({
+        "alice@x": [alice_event],
+        "bob@x":   [bob_event_1, bob_event_2],
+    })
+    assert busy["alice@x"][0][2]["frequency_in_window"] == 1
+    assert busy["bob@x"][0][2]["frequency_in_window"] == 2
+
+
+def test_score_slot_recurring_skippable_bonus_at_threshold():
+    """Recurring conflict at exactly threshold frequency → bonus applies."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 8, "category": "one_on_one",
+                     "recurring": True, "frequency_in_window": 3},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17))
+    # Base penalty (10-8)*5 = 10; bonus +5; net -5; score 95.
+    assert result["score"] == 95
+    bonuses = [b for b in result["breakdown"] if b["delta"] > 0]
+    assert len(bonuses) == 1
+    assert "3×" in bonuses[0]["label"]
+    assert bonuses[0]["delta"] == 5
+
+
+def test_score_slot_recurring_skippable_bonus_below_threshold():
+    """Recurring conflict appearing fewer times than threshold → no bonus."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 8, "category": "one_on_one",
+                     "recurring": True, "frequency_in_window": 2},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17))
+    # Base penalty -10; no bonus; score 90.
+    assert result["score"] == 90
+    assert all(b["delta"] <= 0 for b in result["breakdown"])
+
+
+def test_score_slot_no_bonus_for_non_recurring_even_at_high_freq():
+    """A one-off marked frequency_in_window=999 (shouldn't happen but harmless)
+    must not trigger the bonus since recurring=False."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 8, "category": "one_on_one",
+                     "recurring": False, "frequency_in_window": 99},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17))
+    assert result["score"] == 90
+    assert all(b["delta"] <= 0 for b in result["breakdown"])
+
+
+def test_score_slot_bonus_applies_per_conflict():
+    """Two qualifying conflicts → bonus added twice."""
+    conflicts = [
+        {"attendee": "alice@x",
+         "conflict": {"movability": 8, "category": "one_on_one",
+                      "recurring": True, "frequency_in_window": 4}},
+        {"attendee": "bob@x",
+         "conflict": {"movability": 5, "category": "team_meeting",
+                      "recurring": True, "frequency_in_window": 5}},
+    ]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17))
+    # alice: -10 + 5 = -5
+    # bob:   -25 + 5 = -20
+    # net: 100 - 5 - 20 = 75
+    assert result["score"] == 75
+    bonuses = [b for b in result["breakdown"] if b["delta"] > 0]
+    assert len(bonuses) == 2
+
+
+def test_score_slot_custom_threshold_and_bonus():
+    """Threshold and bonus are configurable via ScoreWeights."""
+    w = fb.ScoreWeights(recurring_skippable_threshold=5, recurring_skippable_bonus=15)
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 8, "category": "one_on_one",
+                     "recurring": True, "frequency_in_window": 4},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    # freq=4 below threshold=5 → no bonus → score 90
+    assert fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17), weights=w)["score"] == 90
+
+    # Bump freq to 5 → bonus kicks in. With custom bonus=15, raw score would
+    # be 100 - 10 + 15 = 105, but we cap at 100 (a slot can't be better than
+    # a baseline all-free one).
+    conflicts[0]["conflict"]["frequency_in_window"] = 5
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17), weights=w)
+    assert result["score"] == 100
+    bonuses = [b for b in result["breakdown"] if b["delta"] > 0]
+    assert bonuses[0]["delta"] == 15
+
+
+def test_make_ask_context_surfaces_frequency_and_id():
+    """The ask-context Claude reads should include the new fields so it can
+    write messages like 'Alice's weekly sync — appears 4 times in this window'."""
+    cls = fb.classify_event(
+        _ev(summary="Weekly", recurring=True, recurring_event_id="rec-w"),
+        series_counts={"rec-w": 4},
+    )
+    start = _dt("2026-05-20T10:00:00-07:00")
+    end = _dt("2026-05-20T10:30:00-07:00")
+    ctx = fb.make_ask_context("alice@x", (start, end, cls))
+    assert ctx["conflict"]["recurring"] is True
+    assert ctx["conflict"]["recurring_event_id"] == "rec-w"
+    assert ctx["conflict"]["frequency_in_window"] == 4

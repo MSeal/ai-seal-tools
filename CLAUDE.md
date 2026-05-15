@@ -13,6 +13,12 @@ Personal AI exploration repo. The goal is to build utilities, skills, and agents
 
 Don't create a git commit without explicit permission. Permission is scoped to a single commit by default — even after a "yes, commit" approval, ask again before the next commit unless the user indicates a wider scope (e.g., "commit freely in this session", "commit each time you reach a stable point", or a similar broadening). Soft-resetting a commit doesn't grant permission to re-commit — wait for the user.
 
+## Scoring magnitudes
+
+For any skill or utility with a scoring/ranking engine (today: `skills/find-meeting-time/freebusy.py`), every penalty or bonus magnitude that affects the output score **must** be declared in a checked-in `score_weights.yaml` (with an optional gitignored `score_weights.local.yaml` override) — never hardcoded inline. Pattern set by `skills/find-meeting-time/score_weights.yaml` + `ScoreWeights` dataclass.
+
+This is a recurring trap: a new "small adjustment" gets added with a literal number in the code path, the user can't see it as a knob, can't test the boundary, can't override it for a one-off run. When adding a new penalty/bonus, the change set should include (a) a new field on the weights dataclass, (b) a matching entry in the committed YAML with comment explaining what it controls, (c) a SETUP.md mention if it's user-facing, (d) a test that the value flows through.
+
 ## Testing
 
 Any non-trivial change to a script under `utils/`, `skills/<name>/`, or `agents/<name>/` should have matching test coverage. Tests live in `tests/` and run via `uv run pytest`. Specifically:

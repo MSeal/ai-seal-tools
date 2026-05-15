@@ -29,3 +29,10 @@ day_edge_late: 5
 # hours (only fires for attendees with a configured timezone in
 # config.yaml's `attendee_timezones` map).
 attendee_tz_outside_hours: 20
+
+# When a recurring conflict appears `threshold` or more times in the queried
+# window (i.e. weekly cadence in a 3-week window, daily in a 1-week window),
+# skipping ONE instance is low-cost — add `bonus` back to the slot's score
+# per qualifying conflict. Set bonus to 0 to disable.
+recurring_skippable_threshold: 3
+recurring_skippable_bonus: 5

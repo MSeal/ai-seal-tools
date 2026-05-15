@@ -81,12 +81,25 @@ class ScoreWeights:
     """Tunable penalties used by score_slot. Defaults come from
     score_weights.yaml; per-user / per-session overrides come from
     score_weights.local.yaml (gitignored) alongside it.
+
+    Rule: every magnitude that score_slot adds or subtracts MUST be a field
+    on this dataclass — no literal numbers in score_slot's body. When adding
+    a new penalty/bonus, add the field here AND the matching entry in
+    score_weights.yaml (with a comment explaining what it controls) AND a
+    test that the value flows through. See project CLAUDE.md > Scoring
+    magnitudes.
     """
     conflict_movability_multiplier: int = 5
     lunch_overlap: int = 10
     day_edge_early: int = 5
     day_edge_late: int = 5
     attendee_tz_outside_hours: int = 20
+    # When a recurring conflict appears >= threshold times in the queried
+    # window (i.e. it's frequent — weekly cadence in a 3-week window, daily
+    # in a 1-week window), skipping one instance is low-cost. Add the bonus
+    # back per qualifying conflict.
+    recurring_skippable_threshold: int = 3
+    recurring_skippable_bonus: int = 5
 
     @classmethod
     def load(
@@ -386,16 +399,28 @@ TITLE_RULES: list[tuple[re.Pattern[str], str, int]] = [
 ]
 
 
-def classify_event(event: dict) -> dict:
-    """Return {category, movability, recurring, visible, summary, attendee_count}."""
+def classify_event(event: dict, *, series_counts: dict[str, int] | None = None) -> dict:
+    """Return classification dict. Optional `series_counts` maps
+    recurringEventId → how many times that series appears in the queried
+    window (per attendee). Used to surface `frequency_in_window` so Claude
+    can write "appears 4 times in the next two weeks" vs "only once" in
+    ask-messages."""
     summary = event.get("summary")
     visible = summary is not None
     event_type = event.get("eventType", "default")
     status = event.get("status", "confirmed")
     transparency = event.get("transparency", "opaque")
     attendees = event.get("attendees", [])
-    recurring = event.get("recurringEventId") is not None
+    recurring_event_id = event.get("recurringEventId")
+    recurring = recurring_event_id is not None
     is_all_day = "date" in event.get("start", {})
+    # How many times this series appears in the queried window (caller-supplied).
+    # 1 by default for one-offs or when we don't have count info. A high number
+    # tells you the cadence: weekly events surface 2-3 times in a typical
+    # 2-week query, monthly only 1.
+    frequency_in_window = 1
+    if recurring_event_id and series_counts:
+        frequency_in_window = series_counts.get(recurring_event_id, 1)
 
     # eventType signals take priority over title parsing
     if event_type == "outOfOffice":
@@ -432,6 +457,8 @@ def classify_event(event: dict) -> dict:
         "category": category,
         "movability": movability,
         "recurring": recurring,
+        "recurring_event_id": recurring_event_id,
+        "frequency_in_window": frequency_in_window,
         "visible": visible,
         "summary": summary,
         "attendee_count": len(attendees),
@@ -463,12 +490,21 @@ def event_blocks_time(event: dict, classification: dict) -> bool:
 def build_busy_map(
     events_by_email: dict[str, list[dict]]
 ) -> dict[str, list[tuple[dt.datetime, dt.datetime, dict]]]:
-    """For each attendee, list (start, end, classification) for blocking events."""
+    """For each attendee, list (start, end, classification) for blocking events.
+    Counts recurring-series occurrences per attendee in a first pass so each
+    event's classification can carry its `frequency_in_window`."""
     out: dict[str, list[tuple[dt.datetime, dt.datetime, dict]]] = {}
     for email, events in events_by_email.items():
+        # First pass: how many times does each series appear in this window?
+        series_counts: dict[str, int] = {}
+        for ev in events:
+            rec_id = ev.get("recurringEventId")
+            if rec_id:
+                series_counts[rec_id] = series_counts.get(rec_id, 0) + 1
+
         blocks: list[tuple[dt.datetime, dt.datetime, dict]] = []
         for ev in events:
-            cls = classify_event(ev)
+            cls = classify_event(ev, series_counts=series_counts)
             if not event_blocks_time(ev, cls):
                 continue
             start = parse_event_time(ev, "start")
@@ -527,6 +563,17 @@ def score_slot(
         score -= penalty
         breakdown.append({"label": f"conflict: {c['attendee']} ({c['conflict']['category']})", "delta": -penalty})
 
+        # High-frequency recurring conflicts get a bonus: easier to skip one
+        # instance when the series happens often.
+        freq = c["conflict"].get("frequency_in_window", 1)
+        if c["conflict"].get("recurring") and freq >= weights.recurring_skippable_threshold:
+            bonus = weights.recurring_skippable_bonus
+            score += bonus
+            breakdown.append({
+                "label": f"recurring & frequent: {c['attendee']} ({freq}× in window)",
+                "delta": bonus,
+            })
+
     local = cursor.astimezone()
     local_end = slot_end.astimezone()
     date = local.date()
@@ -575,7 +622,7 @@ def score_slot(
                 label += ")"
                 breakdown.append({"label": label, "delta": -weights.attendee_tz_outside_hours})
 
-    score = max(0, score)
+    score = max(0, min(100, score))
     return {"score": score, "breakdown": breakdown}
 
 
@@ -590,6 +637,8 @@ def make_ask_context(attendee: str, conflict_block: tuple[dt.datetime, dt.dateti
             "category": cls["category"],
             "movability": cls["movability"],
             "recurring": cls["recurring"],
+            "recurring_event_id": cls.get("recurring_event_id"),
+            "frequency_in_window": cls.get("frequency_in_window", 1),
             "status": cls["status"],
             "is_all_day": cls["is_all_day"],
             "attendee_count": cls["attendee_count"],
