@@ -282,6 +282,54 @@ These are guidance, not literal templates — adapt tone to the meeting purpose 
 
 When the requester themselves has the conflict (`attendee == <requester email>`), phrase it as a self-reminder rather than a message to send: "*You'd need to move:* <conflict>".
 
+## Slack-formatted messages
+
+The templates above are email-flavored. When the user says "draft a Slack message" / "give me something to paste into Slack" / "I'll DM them" — switch to Slack-native conventions:
+
+- **Single-asterisk `*bold*`** (not `**bold**`); `_italic_`; `` `code` ``; `> blockquote`. No headers, no nested bullets deeper than one level.
+- **Short paragraphs**, usually one sentence each. Slack's narrow column makes long lines hard to scan.
+- **First-name @mention** at the start when DM-ing one person (`@alice`) or addressing one in a group thread. We don't have a Slack-handle resolver yet, so use the email's local part as the handle and note any ambiguity in a trailing line ("`@alice` may need a fix — multiple Alices at the company"). Don't render the email address inline.
+- **No greeting block** ("Hi Alice — hope you had a good weekend") — Slack DMs skip that. Lead with the ask.
+- **End with a friction-reducer**, not a sign-off: "happy to handle the reschedule", "react with what works", "no rush".
+
+### Move-conflict ask (Slack DM)
+
+For asking one attendee to shift a single conflicting meeting so a proposed slot works:
+
+```
+Hey @<firstname> — trying to set up a *<duration>m <purpose>* with you and <others, if any>. The slot that works for everyone is *<Day, Time TZ>*, which overlaps your "<conflict summary>".
+
+Could we slide it, or are you OK letting me schedule over it?
+
+Happy to do the rescheduling work if it helps.
+```
+
+Tone variants:
+- **Peer (default)**: as above.
+- **Senior** (`tier >= 3` in seniority.yaml): apologize for the ask, propose an alternative explicitly. "Hey @<firstname> — apologies for the overlap; could we do *<alt slot>* instead, or want me to find another window entirely?"
+- **External / customer** (`category == customer_meeting`): don't generate a Slack ask. Slack-asking a customer to move their meeting is a faux pas — surface in the Notes section that the user should reach out via email or their AE.
+
+If the conflict has `outcome_history.moved > 0`, lead with the track record:
+> "We've moved this a couple times before and it's worked — same play OK?"
+
+### Options proposal (Slack group post / DM)
+
+For offering 2–3 slot options and letting the recipient(s) pick. Use when no all-free slot exists and you're punting the decision to the group:
+
+```
+Hey @<firstname> — proposing *<duration>m <purpose>* at one of these:
+
+• *<Day, Time TZ>* — <one-line caveat if there's a movable conflict>
+• *<Day, Time TZ>* — <caveat>
+• *<Day, Time TZ>* — <caveat>
+
+React with the slot that works for you (or any that work), or shout if none do.
+```
+
+Order options by score (best first). If a slot has a conflict, the caveat should be specific enough that the recipient can self-assess ("overlaps your weekly platform sync; you've moved this before") — but keep it one line. Don't include scores in the message; numerical scoring is internal context, not user-facing chat.
+
+For three-or-more attendee proposals (the multi-attendee case), prefer this format over individual asks — it's lower coordination cost and people can react ⚡-style.
+
 ## Error handling
 
 When `freebusy.py` exits non-zero, route to SETUP.md rather than silently falling back to the browser path:
