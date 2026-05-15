@@ -113,6 +113,41 @@ Key points:
   - Soften repeat declines: if `declined >= 2`, don't keep asking the same way. Propose a different slot or a different attendee.
   - The helper already applies a score adjustment (`learned: ... ±N` line in `score_breakdown`); your job is to phrase the message in light of the history, not redo the math.
 
+## Populating seniority for unknown attendees
+
+When a top-ranked slot's conflict shows attendees you haven't cached
+seniority for, optionally look them up via Glean and write to the cache
+so future runs apply the leadership-tier penalty correctly.
+
+Signal that a lookup might be valuable:
+- `conflict.conflict_attendees` has emails (lower-cased) that aren't in
+  `seniority.yaml` (visible in the helper's output as `seniority_entries_loaded`).
+- The conflict is on a top-3 slot and you're about to draft an ask-message —
+  if the meeting includes a senior org member, the framing changes.
+
+Workflow:
+1. For each unknown email on a top conflict, call `mcp__glean__search`
+   with `app=people` to fetch the profile. Extract `title`,
+   `department`, `manager.totalReportsCount`.
+2. Invoke `record_seniority.py` with the extracted fields:
+
+   ```bash
+   uv run --script skills/find-meeting-time/record_seniority.py \
+     --email some-director@example.com \
+     --title "Director II, Engineering" \
+     --department "Engineering" \
+     --total-reports-count 42 \
+     --source glean
+   ```
+
+3. Next run automatically picks up the new tier.
+
+Don't look up every conflict attendee — only the ones on actually-ranked
+top slots, and only when the meeting purpose suggests seniority might
+matter (cross-team coordination, anything tied to org leadership).
+Sparse curation. The user can always run record_seniority.py by hand
+for entries they want pinned.
+
 ## Logging outcomes after an ask
 
 After the user reports back on how an ask went, log the outcome with `record_outcome.py` so future runs learn from it:

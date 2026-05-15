@@ -71,10 +71,15 @@ SKILL_CONFIG_DIR = CONFIG_DIR / "find-meeting-time"
 CONFIG_FILE = SKILL_CONFIG_DIR / "config.yaml"
 PREFERENCES_FILE = SKILL_CONFIG_DIR / "preferences.md"
 OUTCOMES_FILE = SKILL_CONFIG_DIR / "outcomes.jsonl"
+SENIORITY_FILE = SKILL_CONFIG_DIR / "seniority.yaml"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCORE_WEIGHTS_FILE = SCRIPT_DIR / "score_weights.yaml"
 SCORE_WEIGHTS_LOCAL_FILE = SCRIPT_DIR / "score_weights.local.yaml"
+
+# Resolve sibling modules (seniority.py) without packaging.
+sys.path.insert(0, str(SCRIPT_DIR))
+from seniority import load_seniority, tier_for  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,12 @@ class ScoreWeights:
     learned_moved_bonus_per: int = 2
     learned_declined_penalty_per: int = 3
     learned_max_adjustment: int = 8
+    # Seniority penalty — applied per conflict when the conflicting event
+    # has at least one attendee whose recorded tier (in seniority.yaml)
+    # exceeds the threshold. Penalty scales by tiers above threshold.
+    seniority_threshold: int = 2
+    seniority_penalty_per_tier_above: int = 5
+    seniority_max_penalty: int = 20
 
     @classmethod
     def load(
@@ -488,6 +499,9 @@ def classify_event(event: dict, *, series_counts: dict[str, int] | None = None) 
     status = event.get("status", "confirmed")
     transparency = event.get("transparency", "opaque")
     attendees = event.get("attendees", [])
+    attendee_emails = sorted({
+        a.get("email", "").lower() for a in attendees if a.get("email")
+    })
     recurring_event_id = event.get("recurringEventId")
     recurring = recurring_event_id is not None
     is_all_day = "date" in event.get("start", {})
@@ -540,6 +554,7 @@ def classify_event(event: dict, *, series_counts: dict[str, int] | None = None) 
         "visible": visible,
         "summary": summary,
         "attendee_count": len(attendees),
+        "attendee_emails": attendee_emails,
         "status": status,
         "transparency": transparency,
         "is_all_day": is_all_day,
@@ -620,6 +635,7 @@ def score_slot(
     attendee_timezones: dict[str, str] | None = None,
     attendee_timezone_exceptions: list[dict] | None = None,
     outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
+    seniority_map: dict[str, dict] | None = None,
     weights: ScoreWeights | None = None,
 ) -> dict:
     """Return {score, breakdown} for a candidate slot.
@@ -664,6 +680,23 @@ def score_slot(
                     "label": f"learned: {c['attendee']} / {c['conflict'].get('summary') or 'opaque'} ({counts_summary})",
                     "delta": delta,
                 })
+
+        # Seniority penalty — if the conflicting event has senior attendees,
+        # moving it is harder regardless of who we're directly asking.
+        if seniority_map:
+            conflict_attendees = c["conflict"].get("conflict_attendees") or []
+            ranked = [(e, tier_for(e, seniority_map)) for e in conflict_attendees]
+            ranked = [(e, t) for e, t in ranked if t > 0]
+            if ranked:
+                top_email, max_tier = max(ranked, key=lambda x: x[1])
+                if max_tier > weights.seniority_threshold:
+                    penalty = (max_tier - weights.seniority_threshold) * weights.seniority_penalty_per_tier_above
+                    penalty = min(penalty, weights.seniority_max_penalty)
+                    score -= penalty
+                    breakdown.append({
+                        "label": f"senior attendee on conflict: {top_email} (tier {max_tier})",
+                        "delta": -penalty,
+                    })
 
     local = cursor.astimezone()
     local_end = slot_end.astimezone()
@@ -743,6 +776,7 @@ def make_ask_context(
             "status": cls["status"],
             "is_all_day": cls["is_all_day"],
             "attendee_count": cls["attendee_count"],
+            "conflict_attendees": cls.get("attendee_emails", []),
             "conflict_start": start.astimezone().isoformat(),
             "conflict_end": end.astimezone().isoformat(),
         },
@@ -761,6 +795,7 @@ def find_candidate_slots(
     attendee_timezones: dict[str, str] | None = None,
     attendee_timezone_exceptions: list[dict] | None = None,
     outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
+    seniority_map: dict[str, dict] | None = None,
     weights: ScoreWeights | None = None,
 ) -> list[dict]:
     """Slide a duration-sized window through [start, end] within each day's
@@ -796,6 +831,7 @@ def find_candidate_slots(
             attendee_timezones=attendee_timezones,
             attendee_timezone_exceptions=attendee_timezone_exceptions,
             outcomes_aggregated=outcomes_aggregated,
+            seniority_map=seniority_map,
             weights=weights,
         )
         slots.append({
@@ -896,6 +932,7 @@ def main() -> None:
     attendee_timezones = load_attendee_timezones(args.config)
     attendee_timezone_exceptions = load_attendee_timezone_exceptions(args.config)
     outcomes_aggregated = load_outcomes()
+    seniority_map = load_seniority(SENIORITY_FILE)
     weights = ScoreWeights.load()
     busy_by_email = build_busy_map(events_by_email)
     all_slots = find_candidate_slots(
@@ -904,6 +941,7 @@ def main() -> None:
         attendee_timezones=attendee_timezones,
         attendee_timezone_exceptions=attendee_timezone_exceptions,
         outcomes_aggregated=outcomes_aggregated,
+        seniority_map=seniority_map,
         weights=weights,
     )
     top_slots = dedup_and_rank(all_slots, args.top)
@@ -916,6 +954,8 @@ def main() -> None:
         "preferences_path": str(PREFERENCES_FILE) if PREFERENCES_FILE.exists() else None,
         "outcomes_path": str(OUTCOMES_FILE) if OUTCOMES_FILE.exists() else None,
         "outcomes_loaded": sum(sum(v for v in agg.values() if isinstance(v, int)) for agg in outcomes_aggregated.values()),
+        "seniority_path": str(SENIORITY_FILE) if SENIORITY_FILE.exists() else None,
+        "seniority_entries_loaded": len(seniority_map),
         "score_weights": dataclasses.asdict(weights),
         "working_hours": {d: f"{ws.isoformat(timespec='minutes')}-{we.isoformat(timespec='minutes')}" for d, (ws, we) in working_hours.items()},
         "attendee_timezones": attendee_timezones,

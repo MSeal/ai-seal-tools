@@ -31,3 +31,9 @@
     - ~/.config/ai-seal-tools/find-meeting-time/outcomes.jsonl
     - config.local/find-meeting-time/outcomes.jsonl
   template_if_missing: templates/outcomes.jsonl
+
+- target: ~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/My Drive/ai-seal-tools/find-meeting-time/seniority.yaml
+  symlinks:
+    - ~/.config/ai-seal-tools/find-meeting-time/seniority.yaml
+    - config.local/find-meeting-time/seniority.yaml
+  template_if_missing: templates/seniority.yaml

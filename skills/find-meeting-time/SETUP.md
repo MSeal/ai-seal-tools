@@ -315,6 +315,48 @@ attendee_tz_outside_hours: 40    # TZ mismatch is a strong signal for me
 Every helper run echoes the effective weights into the output JSON under
 `score_weights`, so you can confirm what actually got loaded.
 
+### `seniority.yaml` — per-attendee tiers for the leadership penalty
+
+Maps `email → {tier, title, ...}`. Used by `freebusy.py` to penalize slots
+whose conflicting events include senior org members (harder to move
+regardless of who you ask). Tier scale (0=IC, 5=C-level) is documented
+in the file's header comment.
+
+Three knobs in `score_weights.yaml` (`seniority_threshold`,
+`seniority_penalty_per_tier_above`, `seniority_max_penalty`) control
+where the penalty kicks in and how steep it gets.
+
+**Two ways to populate:**
+
+1. **Hand-curated** — open `config.local/find-meeting-time/seniority.yaml`
+   and write entries directly. Either bare `email: tier` or a rich record
+   with audit info. Use this for entries you want pinned regardless of
+   what an automated lookup says.
+
+2. **Via Claude after a Glean lookup** — when a conflict surfaces an
+   attendee not in the cache, Claude calls `mcp__glean__search` with
+   `app=people` to pull the person's profile, then invokes
+   `record_seniority.py` to write the record. The source mapping is
+   isolated in `seniority_glean.py` — if you later want to back it with
+   LDAP/SCIM/etc., add a sibling `seniority_<source>.py` exporting
+   `parse_<source>_record(record) -> SeniorityFields`. The on-disk
+   format, scoring, and CLI stay the same.
+
+```bash
+# Manual:
+uv run --script skills/find-meeting-time/record_seniority.py \
+  --email alice@example.com --title "VP, Engineering" --source manual
+
+# After Glean (fields extracted from the people-record by Claude):
+uv run --script skills/find-meeting-time/record_seniority.py \
+  --email alice@example.com --title "Director II, Engineering" \
+  --department Engineering --total-reports-count 42 --source glean
+```
+
+Inspect with `cat config.local/find-meeting-time/seniority.yaml`. The
+file is Drive-backed via the same symlink pattern as `preferences.md`
+and `outcomes.jsonl`, so seniority cache syncs across machines.
+
 ### `outcomes.jsonl` — the learned-from-experience log
 
 When the user reports back on an ask ("Alice agreed to move", "Bob declined"),

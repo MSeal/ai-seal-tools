@@ -48,3 +48,14 @@ recurring_skippable_bonus: 5
 learned_moved_bonus_per: 2
 learned_declined_penalty_per: 3
 learned_max_adjustment: 8
+
+# Seniority penalty — applied per conflict when the conflicting event
+# has at least one attendee whose tier (in seniority.yaml) exceeds the
+# threshold. Tiers: 0=IC, 1=senior IC / first-line manager, 2=Principal
+# IC / Sr Manager, 3=Director, 4=VP, 5=SVP/EVP/C-level.
+#   penalty = (max_tier - threshold) * per_tier_above, clamped at max_penalty
+# Defaults: any conflict whose senior attendee is a Director (3) or above
+# gets a penalty starting at -5 and rising to -20 for SVP/C-level.
+seniority_threshold: 2
+seniority_penalty_per_tier_above: 5
+seniority_max_penalty: 20

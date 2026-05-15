@@ -1031,6 +1031,125 @@ def test_make_ask_context_surfaces_outcome_history():
     assert ctx["conflict"]["outcome_history"] == {"moved": 3, "declined": 1, "last_outcome": "moved"}
 
 
+# ---------------------------------------------------------------------------
+# Seniority — attendee_emails on classification + score_slot penalty (task #10)
+# ---------------------------------------------------------------------------
+
+def test_classify_emits_attendee_emails():
+    """Classification carries the list of conflict attendees (lowercased,
+    deduped, sorted) so score_slot and Claude can look up seniority/etc."""
+    cls = fb.classify_event(_ev(
+        summary="Big sync",
+        attendees=[
+            {"email": "Alice@X"},
+            {"email": "bob@x"},
+            {"email": "alice@x"},  # dup
+        ],
+    ))
+    assert cls["attendee_emails"] == ["alice@x", "bob@x"]
+
+
+def test_make_ask_context_surfaces_conflict_attendees():
+    """The per-conflict ask context exposes conflict_attendees so Claude can
+    cite who else is on the meeting in ask-messages."""
+    ev = _ev(summary="Sync", attendees=[{"email": "alice@x"}, {"email": "bob@x"}])
+    cls = fb.classify_event(ev)
+    start = _dt("2026-05-20T10:00:00-07:00")
+    end = _dt("2026-05-20T11:00:00-07:00")
+    ctx = fb.make_ask_context("alice@x", (start, end, cls))
+    assert ctx["conflict"]["conflict_attendees"] == ["alice@x", "bob@x"]
+
+
+def test_score_slot_seniority_penalty_at_director():
+    """Director (tier 3) on the conflict → penalty (3-2)*5 = -5."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 5, "category": "team_meeting",
+                     "conflict_attendees": ["alice@x", "director@x"]},
+    }]
+    sen = {"director@x": {"tier": 3}}
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           seniority_map=sen)
+    # Base penalty (10-5)*5 = 25; seniority -5; net -30; score 70
+    assert result["score"] == 70
+    sen_entry = [b for b in result["breakdown"] if b["label"].startswith("senior attendee")]
+    assert len(sen_entry) == 1
+    assert "director@x" in sen_entry[0]["label"]
+    assert "tier 3" in sen_entry[0]["label"]
+    assert sen_entry[0]["delta"] == -5
+
+
+def test_score_slot_seniority_uses_max_tier_among_attendees():
+    """When the conflict has multiple ranked attendees, the most senior
+    determines the penalty (it's that person whose presence makes moving
+    hard)."""
+    conflicts = [{
+        "attendee": "ic@x",
+        "conflict": {"movability": 5, "category": "team_meeting",
+                     "conflict_attendees": ["ic@x", "director@x", "vp@x"]},
+    }]
+    sen = {"director@x": {"tier": 3}, "vp@x": {"tier": 4}}
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           seniority_map=sen)
+    # max tier is 4 (VP), penalty (4-2)*5 = 10
+    sen_entry = next(b for b in result["breakdown"] if "senior attendee" in b["label"])
+    assert "vp@x" in sen_entry["label"]
+    assert sen_entry["delta"] == -10
+
+
+def test_score_slot_seniority_below_threshold_no_penalty():
+    """A senior IC (tier 1) on the conflict is at/below threshold (default 2) → no penalty."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 5, "category": "team_meeting",
+                     "conflict_attendees": ["alice@x", "staff@x"]},
+    }]
+    sen = {"staff@x": {"tier": 1}}
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           seniority_map=sen)
+    assert all("senior attendee" not in b["label"] for b in result["breakdown"])
+
+
+def test_score_slot_seniority_clamped_at_max():
+    """A C-level (tier 5) over the default threshold (2) gives (5-2)*5 = 15.
+    Custom configuration could exceed seniority_max_penalty; the cap kicks in."""
+    conflicts = [{
+        "attendee": "ic@x",
+        "conflict": {"movability": 5, "category": "team_meeting",
+                     "conflict_attendees": ["ic@x", "cto@x"]},
+    }]
+    sen = {"cto@x": {"tier": 5}}
+    # Use a huge per-tier value so the cap engages
+    w = fb.ScoreWeights(seniority_penalty_per_tier_above=100, seniority_max_penalty=30)
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           seniority_map=sen, weights=w)
+    sen_entry = next(b for b in result["breakdown"] if "senior attendee" in b["label"])
+    assert sen_entry["delta"] == -30  # clamped, not -300
+
+
+def test_score_slot_no_penalty_when_seniority_map_empty():
+    """No seniority data → no senior-attendee breakdown entry regardless of
+    who's on the conflict."""
+    conflicts = [{
+        "attendee": "alice@x",
+        "conflict": {"movability": 5, "category": "team_meeting",
+                     "conflict_attendees": ["alice@x", "cto@x"]},
+    }]
+    start = _dt("2026-05-20T14:00:00-07:00")
+    end = _dt("2026-05-20T15:00:00-07:00")
+    result = fb.score_slot(start, end, conflicts, dt.time(9), dt.time(17),
+                           seniority_map={})
+    assert all("senior attendee" not in b["label"] for b in result["breakdown"])
+
+
 def test_make_ask_context_no_history_returns_none():
     """No matching outcomes → outcome_history is None (Claude knows to not cite)."""
     ev = _ev(summary="Weekly", recurring=True, recurring_event_id="rec-NEW")

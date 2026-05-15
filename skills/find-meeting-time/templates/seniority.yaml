@@ -1,0 +1,28 @@
+# Per-attendee seniority tiers, used by find-meeting-time scoring to
+# penalize slots whose conflicting events include senior org members
+# (harder to move regardless of who you ask). Maintained by Claude
+# via record_seniority.py (called after looking up an attendee in Glean
+# or another directory), or hand-edited.
+#
+# Tier scale (used by score_weights.yaml's seniority knobs):
+#   0  Default / IC (also any unlisted attendee)
+#   1  Senior IC ("Senior", "Staff" prefix) or first-line manager
+#   2  Principal IC or Senior Manager
+#   3  Director
+#   4  VP / Vice President
+#   5  SVP / EVP / C-level
+#
+# Each entry can be a bare integer or a rich record with audit info.
+#
+# Examples (uncomment to use):
+# seniority:
+#   exec@example.com:
+#     tier: 5
+#     title: "Chief Technology Officer"
+#     department: "Engineering"
+#     source: "manual"
+#     fetched_at: "2026-01-01T00:00:00-08:00"
+#   vp-eng@example.com: 4              # bare integer for hand-curated entries
+#   director@example.com: 3
+
+seniority: {}
