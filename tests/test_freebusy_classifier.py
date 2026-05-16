@@ -1219,6 +1219,98 @@ def test_score_slot_required_and_optional_mixed():
     assert result["score"] == 67
 
 
+# ---------------------------------------------------------------------------
+# Lead-time penalty (task #19)
+# ---------------------------------------------------------------------------
+
+def _slot_around(now_str, offset_minutes, duration_minutes=30):
+    """Return (slot_start, slot_end, now) where slot_start = now + offset."""
+    now = _dt(now_str)
+    start = now + dt.timedelta(minutes=offset_minutes)
+    end = start + dt.timedelta(minutes=duration_minutes)
+    return start, end, now
+
+
+def test_score_slot_no_lead_time_penalty_when_now_is_none():
+    """now=None preserves prior behavior — no lead-time penalty path runs."""
+    start = _dt("2026-05-15T10:00:00-07:00")
+    end = _dt("2026-05-15T10:30:00-07:00")
+    result = fb.score_slot(start, end, conflicts=[], work_start=dt.time(9), work_end=dt.time(17))
+    assert all("lead time" not in b["label"] for b in result["breakdown"])
+
+
+def test_score_slot_full_within_hour_penalty_when_slot_is_now():
+    """Slot starting exactly at now → full within-hour penalty (default 40)."""
+    start, end, now = _slot_around("2026-05-15T14:00:00-07:00", offset_minutes=0)
+    result = fb.score_slot(start, end, [], dt.time(9), dt.time(17), now=now)
+    lead = next(b for b in result["breakdown"] if b["label"].startswith("lead time"))
+    assert lead["delta"] == -40
+
+
+def test_score_slot_within_hour_penalty_interpolates():
+    """Slot 30 min from now → interpolated between within_hour (40) and
+    same_day (10): 40*0.5 + 10*0.5 = 25."""
+    start, end, now = _slot_around("2026-05-15T14:00:00-07:00", offset_minutes=30)
+    result = fb.score_slot(start, end, [], dt.time(9), dt.time(17), now=now)
+    lead = next(b for b in result["breakdown"] if b["label"].startswith("lead time"))
+    assert lead["delta"] == -25
+
+
+def test_score_slot_at_sixty_minutes_uses_same_day_penalty():
+    """Slot at exactly +60 min lands at the same-day floor (default 10)."""
+    start, end, now = _slot_around("2026-05-15T14:00:00-07:00", offset_minutes=60)
+    result = fb.score_slot(start, end, [], dt.time(9), dt.time(17), now=now)
+    lead = next(b for b in result["breakdown"] if b["label"].startswith("lead time"))
+    assert lead["delta"] == -10
+
+
+def test_score_slot_later_same_day_flat_penalty():
+    """Slot several hours later same day → flat same-day penalty."""
+    start, end, now = _slot_around("2026-05-15T09:00:00-07:00", offset_minutes=180)  # noon
+    result = fb.score_slot(start, end, [], dt.time(9), dt.time(17), now=now)
+    lead = next(b for b in result["breakdown"] if b["label"].startswith("lead time"))
+    assert lead["delta"] == -10
+    assert "same-day" in lead["label"]
+
+
+def test_score_slot_next_day_no_lead_time_penalty():
+    """Slot tomorrow → no lead-time penalty fired."""
+    now = _dt("2026-05-15T14:00:00-07:00")
+    start = _dt("2026-05-18T10:00:00-07:00")  # next Monday
+    end = _dt("2026-05-18T10:30:00-07:00")
+    result = fb.score_slot(start, end, [], dt.time(9), dt.time(17), now=now)
+    assert all("lead time" not in b["label"] for b in result["breakdown"])
+
+
+def test_score_slot_past_slot_gets_full_penalty():
+    """Defensive: a slot already in the past (slipped through) takes the
+    heaviest penalty so it bottoms out in the ranking."""
+    now = _dt("2026-05-15T14:00:00-07:00")
+    start = _dt("2026-05-15T13:30:00-07:00")  # 30 min before now
+    end = _dt("2026-05-15T14:00:00-07:00")
+    result = fb.score_slot(start, end, [], dt.time(9), dt.time(17), now=now)
+    lead = next(b for b in result["breakdown"] if b["label"].startswith("lead time"))
+    assert lead["delta"] == -40
+    assert "past" in lead["label"]
+
+
+def test_score_slot_lead_time_uses_custom_weights():
+    """Custom within-hour/same-day knobs scale correspondingly."""
+    start, end, now = _slot_around("2026-05-15T14:00:00-07:00", offset_minutes=0)
+    w = fb.ScoreWeights(lead_time_within_hour_penalty=80, lead_time_same_day_penalty=20)
+    result = fb.score_slot(start, end, [], dt.time(9), dt.time(17), now=now, weights=w)
+    lead = next(b for b in result["breakdown"] if b["label"].startswith("lead time"))
+    assert lead["delta"] == -80
+
+
+def test_score_slot_lead_time_zero_disables_penalty():
+    """Setting both knobs to 0 effectively disables the feature."""
+    start, end, now = _slot_around("2026-05-15T14:00:00-07:00", offset_minutes=0)
+    w = fb.ScoreWeights(lead_time_within_hour_penalty=0, lead_time_same_day_penalty=0)
+    result = fb.score_slot(start, end, [], dt.time(9), dt.time(17), now=now, weights=w)
+    assert all("lead time" not in b["label"] for b in result["breakdown"])
+
+
 def test_score_weights_loads_float_multiplier(tmp_path):
     """ScoreWeights.load casts to the right type per field annotation."""
     defaults = tmp_path / "score_weights.yaml"

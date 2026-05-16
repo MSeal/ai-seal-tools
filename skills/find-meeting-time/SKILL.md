@@ -128,6 +128,7 @@ Key points:
   - `frequency_in_window >= 4` in a 2-week window → weekly or more frequent. Phrase asks as "could we skip this week's instance?" — the attendee has many more chances.
   - `frequency_in_window == 1` for a recurring event → monthly cadence or rarer. Phrase asks as "could we move it?" — skipping costs them a month of catch-up.
   - For one-offs (`recurring: false`, `frequency_in_window: 1`), don't make recurrence-based assumptions — just refer to the event by title.
+- `score_breakdown` may include a `lead time: ...` entry when a slot is too close to "now" (helper's `now` reflected in the top-level `now` output field). Two-tier penalty: heavy within the hour (linearly scaling from −40 at now down to −10 at +60min) and lighter same-day (flat −10 for the rest of today). Tomorrow+ slots are unpenalized. If you see this entry on a top-ranked slot, mention the short notice in your user-facing explanation — and ideally suggest a next-day option in the same response.
 - `conflict.outcome_history` is the per-(event, attendee) record of past asks from `outcomes.jsonl`. When non-null, it has counts like `{"moved": 3, "declined": 1, "last_outcome": "moved"}`. Use it to:
   - Cite track record in ask-messages: "We've moved this twice already this year — happy to do the rescheduling work again."
   - Soften repeat declines: if `declined >= 2`, don't keep asking the same way. Propose a different slot or a different attendee.

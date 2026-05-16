@@ -127,6 +127,13 @@ class ScoreWeights:
     # ~a third of the penalty of required ones — they still inform the
     # ranking but don't dominate it.
     optional_attendee_penalty_multiplier: float = 0.3
+    # Lead-time penalty — discourages proposing slots people don't have
+    # time to prep for. Within-hour penalty linearly interpolates from
+    # the full magnitude (slot at now) down to the same-day magnitude
+    # (slot at now+60min). Same-day-later slots get the flat same-day
+    # penalty. Tomorrow+ slots get nothing.
+    lead_time_within_hour_penalty: int = 40
+    lead_time_same_day_penalty: int = 10
 
     @classmethod
     def load(
@@ -617,6 +624,38 @@ def build_busy_map(
     return out
 
 
+def _lead_time_penalty(
+    slot_start: dt.datetime,
+    now: dt.datetime,
+    weights: ScoreWeights,
+) -> tuple[int, str | None]:
+    """Penalize slots that are too soon. Returns (penalty, label).
+
+    Curve:
+      [0, 60) min from now → linearly interpolate from within_hour down
+                             to same_day (0 min = full within-hour penalty,
+                             60 min = full same-day penalty)
+      [60 min, same-day-end] → flat same_day
+      next day onwards     → 0
+    Slots in the past get the full within-hour penalty (defensive — the
+    helper should already have filtered them, but treat them harshly if
+    they slip through).
+    """
+    minutes_until = (slot_start - now).total_seconds() / 60
+    if minutes_until <= 0:
+        return weights.lead_time_within_hour_penalty, "in the past (clock drift)"
+    if minutes_until < 60:
+        ratio = minutes_until / 60
+        penalty = int(round(
+            weights.lead_time_within_hour_penalty * (1 - ratio)
+            + weights.lead_time_same_day_penalty * ratio
+        ))
+        return penalty, f"~{int(minutes_until)} min from now"
+    if slot_start.astimezone().date() == now.astimezone().date():
+        return weights.lead_time_same_day_penalty, "same-day, short notice"
+    return 0, None
+
+
 def _outside_working_hours_local(
     local_start: dt.datetime,
     local_end: dt.datetime,
@@ -645,6 +684,7 @@ def score_slot(
     attendee_timezone_exceptions: list[dict] | None = None,
     outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
     seniority_map: dict[str, dict] | None = None,
+    now: dt.datetime | None = None,
     weights: ScoreWeights | None = None,
 ) -> dict:
     """Return {score, breakdown} for a candidate slot.
@@ -736,6 +776,17 @@ def score_slot(
         score -= weights.day_edge_late
         breakdown.append({"label": "day-edge (late)", "delta": -weights.day_edge_late})
 
+    # Lead-time penalty — discourage proposing slots people don't have
+    # time to prep for. Heavier within the hour, lighter same-day.
+    if now is not None:
+        lead_penalty, lead_label = _lead_time_penalty(cursor, now, weights)
+        if lead_penalty > 0:
+            score -= lead_penalty
+            breakdown.append({
+                "label": f"lead time: {lead_label}" if lead_label else "lead time",
+                "delta": -lead_penalty,
+            })
+
     # Cross-attendee TZ check — penalize slots outside an attendee's
     # working hours in their own local TZ. Only fires for attendees with
     # a configured base TZ (or an active exception window) in config.yaml;
@@ -814,6 +865,7 @@ def find_candidate_slots(
     attendee_timezone_exceptions: list[dict] | None = None,
     outcomes_aggregated: dict[tuple[str, str], dict[str, int | str]] | None = None,
     seniority_map: dict[str, dict] | None = None,
+    now: dt.datetime | None = None,
     weights: ScoreWeights | None = None,
 ) -> list[dict]:
     """Slide a duration-sized window through [start, end] within each day's
@@ -851,6 +903,7 @@ def find_candidate_slots(
             attendee_timezone_exceptions=attendee_timezone_exceptions,
             outcomes_aggregated=outcomes_aggregated,
             seniority_map=seniority_map,
+            now=now,
             weights=weights,
         )
         slots.append({
@@ -957,6 +1010,7 @@ def main() -> None:
     outcomes_aggregated = load_outcomes()
     seniority_map = load_seniority(SENIORITY_FILE)
     weights = ScoreWeights.load()
+    now = dt.datetime.now().astimezone()
     busy_by_email = build_busy_map(events_by_email)
     all_slots = find_candidate_slots(
         busy_by_email, start, end, duration, working_hours,
@@ -966,6 +1020,7 @@ def main() -> None:
         attendee_timezone_exceptions=attendee_timezone_exceptions,
         outcomes_aggregated=outcomes_aggregated,
         seniority_map=seniority_map,
+        now=now,
         weights=weights,
     )
     top_slots = dedup_and_rank(all_slots, args.top)
@@ -982,6 +1037,7 @@ def main() -> None:
         "outcomes_loaded": sum(sum(v for v in agg.values() if isinstance(v, int)) for agg in outcomes_aggregated.values()),
         "seniority_path": str(SENIORITY_FILE) if SENIORITY_FILE.exists() else None,
         "seniority_entries_loaded": len(seniority_map),
+        "now": now.isoformat(timespec="seconds"),
         "score_weights": dataclasses.asdict(weights),
         "working_hours": {d: f"{ws.isoformat(timespec='minutes')}-{we.isoformat(timespec='minutes')}" for d, (ws, we) in working_hours.items()},
         "attendee_timezones": attendee_timezones,

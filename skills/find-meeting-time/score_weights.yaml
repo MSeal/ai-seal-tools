@@ -67,3 +67,16 @@ seniority_max_penalty: 20
 # the meeting can proceed without them. 1.0 = treat same as required;
 # 0.0 = ignore their conflicts entirely.
 optional_attendee_penalty_multiplier: 0.3
+
+# Lead-time penalty — discourages proposing slots people don't have
+# time to prep for. Two tiers:
+#   within-hour penalty (default 40) linearly interpolates from full
+#     magnitude (slot AT now) down to the same-day magnitude (slot at
+#     now+60min);
+#   same-day penalty (default 10) is flat for any slot today that's
+#     more than an hour out;
+#   tomorrow+ → no penalty.
+# Net curve (defaults): 0min → −40, 30min → −25, 60min → −10,
+#                        same-day-later → −10, next-day → 0.
+lead_time_within_hour_penalty: 40
+lead_time_same_day_penalty: 10
