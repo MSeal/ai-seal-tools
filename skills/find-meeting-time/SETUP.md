@@ -296,9 +296,12 @@ defaults:
   Google RPC the Calendar UI calls. `create_event.py` instead attaches
   the Zoom URL as hand-crafted `conferenceData` directly on the event;
   the Calendar UI still renders a Join Zoom Meeting button.
-- For per-event Zoom rooms (vs reusing personal/pool URLs), see the
-  backlog — needs either a Playwright-driven UI path or a Zoom REST
-  API integration.
+- For per-event Zoom rooms (vs reusing personal/pool URLs), use the
+  Playwright "Browser path (Plan B)" documented in `SKILL.md` — it
+  drives the Calendar UI to click the Zoom add-on, triggering the real
+  add-on dispatch. Zoom REST API is unavailable in orgs that require
+  Marketplace admin approval for OAuth apps (most enterprise Zoom
+  tenants, Confluent included).
 
 CLI overrides for one-off queries:
 

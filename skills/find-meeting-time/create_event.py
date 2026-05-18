@@ -7,12 +7,21 @@
 #   "pyyaml>=6.0",
 # ]
 # ///
-"""create_event.py — book a slot returned by freebusy.py.
+"""create_event.py — API-only path for booking a slot returned by freebusy.py.
 
 Creates a Google Calendar event on the requester's primary calendar with
-the given attendees and (by default) a Zoom link via the Workspace add-on.
-Falls back to Google Meet if the user configures `default_conference: meet`
-in config.yaml, or to no conference link with `none`.
+the given attendees and a hand-crafted conferenceData entry pointing at
+either the user's Zoom personal room, a deterministic pick from a static
+Zoom-room pool, or a Google Meet link.
+
+NOTE: this script does NOT trigger the Zoom Workspace add-on's real
+conference-creation dispatch. Google's public Calendar API only accepts
+`hangoutsMeet` in `createRequest.conferenceSolutionKey.type`, so add-on
+dispatch is unavailable here. The Calendar UI invokes it via a private
+RPC that requires browser-session auth. When a real Zoom-add-on
+meeting is required (external attendees, audit/compliance needs for
+unique URLs), use the Playwright-driven "Browser path" documented in
+SKILL.md instead of this script.
 
 Scope: requires `https://www.googleapis.com/auth/calendar.events` (write).
 This is a SUPERSET of freebusy.py's `calendar.events.readonly` scope, so

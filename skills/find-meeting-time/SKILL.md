@@ -171,7 +171,26 @@ for entries they want pinned.
 
 ## Booking the chosen slot
 
-After the user explicitly says "book it" / "schedule it" / "create the event" / "send the invite" (or equivalent), call `create_event.py` to materialize the slot as a real Calendar event with attendees and a conference link.
+After the user explicitly says "book it" / "schedule it" / "create the event" / "send the invite" (or equivalent), materialize the slot as a real Calendar event. Two execution paths exist, mirroring find-meeting-time's API-vs-browser split — kept separate so each can evolve independently:
+
+- **API path** — `create_event.py`. Fast and structured. Attaches a hand-crafted Zoom URL (your personal room or a pool rotation) or a Meet link. **Does NOT trigger the real Zoom Workspace add-on**: Google's public Calendar API doesn't expose that dispatch (see SETUP.md).
+- **Browser path (Plan B)** — Playwright drives Calendar's UI and clicks the Zoom add-on button. ~5–10s slower. Produces a fresh, Zoom-API-backed meeting URL via the real add-on dispatch.
+
+**The API path is the default.** It's faster, structured, and doesn't depend on browser session state. Use it for: internal 1:1 or small-team sync where the personal room is fine; back-to-back parallel meetings (`--conference zoom-pool`); explicit Google Meet preference (`--conference meet`); in-person/holds (`--conference none`).
+
+**Use the browser path only when the API path can't satisfy the requirement.** Triggers: external attendees (customers, candidates, vendors) where the personal room reads informal; user explicitly says "use the real Zoom" / "trigger the add-on" / "real Zoom dispatch"; audit/compliance need for a fresh unique Zoom meeting per event.
+
+When ambiguous, ask once. Otherwise, default to API path.
+
+**Rules of engagement (both paths):**
+
+- **Confirm before sending invites to others.** Picking a slot in chat ("Mon 1:30 works") is not the same as authorizing invites to go out. If the user hasn't used an explicit booking verb, propose what you'd send (summary, attendees, conference type) and wait for a "yes". Once they say "book it" with an explicit verb, you have consent for that single event — don't keep booking subsequent events implicitly.
+- **Use a summary that reads well in invitees' inboxes.** Not "[Meeting]" or "Quick chat" — be specific: "AI tooling sync — mseal + eve", "Hiring debrief: <candidate>". Pull from the conversation context.
+- **Pass attendee emails resolved by the Slack-ref tool**, not raw `@handles`. Every attendee should be `<local>@example.com` form.
+- **Echo the result** with the event's HTML link (click-to-edit) and the conference join URL.
+- **Don't auto-log this as an outcome** — `record_outcome.py` is for tracking ask-to-move outcomes, not event creation.
+
+### API path
 
 ```bash
 uv run --script "$(dirname "$0")/create_event.py" \
@@ -185,26 +204,69 @@ uv run --script "$(dirname "$0")/create_event.py" \
   [--dry-run]                                # preview body without calling API
 ```
 
-**Rules of engagement:**
+**Conference choice:**
+- Default: `--conference` from `config.yaml` (typically `zoom`, meaning the personal meeting room).
+- **`zoom-pool`**: back-to-back meetings or parallel calls. Deterministically rotates through `zoom_fallback_rooms`.
+- **`meet`**: when the user prefers Google Meet.
+- **`none`**: in-person events, holds, focus blocks.
+- **`--zoom-url`**: ad-hoc override for a specific provided URL.
 
-- **Confirm before sending invites to others.** Picking a slot in chat ("Mon 1:30 works") is not the same as authorizing invites to go out. If the user hasn't used an explicit booking verb, propose what you'd send (summary, attendees, conference type) and wait for a "yes". Once they say "book it" with an explicit verb, you have consent for that single event — don't keep booking subsequent events implicitly.
-
-- **Conference choice:**
-  - Default (most cases): use `--conference` from `config.yaml` (typically `zoom`, meaning the personal meeting room). One-on-ones and casual internal meetings.
-  - **`zoom-pool`**: when the user mentions back-to-back meetings, multiple parallel calls, or has explicitly asked for unique rooms. Deterministically rotates through `zoom_fallback_rooms`.
-  - **`meet`**: when the user prefers Google Meet (asks for "Meet" explicitly, or when Zoom isn't configured and they want something working immediately).
-  - **`none`**: in-person events, holds, focus blocks, anything that doesn't need a join link.
-  - **`--zoom-url`**: ad-hoc override for when a specific Zoom URL was provided (a customer sent one, etc.).
-
-- **Use a `--summary` that reads well in invitees' inboxes.** Not "[Meeting]" or "Quick chat". Be specific: "AI tooling sync — mseal + eve", "Hiring debrief: <candidate>", etc. Pull from the conversation context.
-
-- **Pass attendee emails resolved by the Slack-ref tool**, not raw `@handles`. By the time you're calling `create_event.py`, every attendee should be a `<local>@example.com` form.
-
-- **Echo the result** to the user with the event's `html_link` for click-to-edit and the `join_url` for the conference link. If `conference_status` flags an issue (missing join URL when one was expected), retry once with `--conference meet` and call out the swap, or fall back to surfacing the bare event link and let the user fix conferencing manually.
-
-- **Don't auto-log this as an outcome** — `record_outcome.py` is for tracking who-said-what-when-asked-to-move, not for event-creation events.
+If `conference_status` in the response flags an issue (missing join URL when one was expected), retry once with `--conference meet` and call out the swap, or surface the bare event link and let the user fix conferencing manually.
 
 The first run after upgrading from a read-only `freebusy.py` will pop a browser for the broader write scope (the auth path's scope-mismatch detector handles it). User clicks through once; new token caches separately at `~/.config/ai-seal-tools/credentials/google_calendar_write_token.json`.
+
+### Browser path (Plan B — real Zoom add-on)
+
+Drives the Calendar UI via Playwright MCP, clicking the Zoom Workspace add-on the same way a user would manually. The add-on's `createConferenceData` callback fires and Google attaches the resulting Zoom URL — identical to opening Calendar and clicking the button yourself, just automated.
+
+Pre-requisite: the Playwright Chromium profile already has a logged-in Calendar session. If not, step 1 will land at `accounts.google.com`; stop, ask the user to sign in manually in that browser context, retry.
+
+Follows the snapshot-driven / vision-fallback discipline in `prompts/browsing.md`. Re-snapshot after every state-changing action; the Calendar editor's labels and refs rotate.
+
+1. `browser_navigate("https://calendar.google.com")`. Confirm you land on the grid (not `accounts.google.com`). If signed out, stop and report — do not type credentials.
+
+2. Press `c` to open quick-create, then click **More options** to enter the full editor. (The full editor is more reliable to drive than the popover.)
+
+3. Set the title: focus the title input, type the summary. Same specificity guidance as the API path.
+
+4. Set start/end via the date/time fields. Tab through `start date → start time → end date → end time`; time fields accept typed values like "1:30 PM". Re-snapshot after each field to confirm the value stuck (Calendar silently rejects malformed inputs).
+
+5. Add each guest in the **Add guests** field. Type the email, wait for the directory autocomplete entry, press **Enter** to commit. Flag any guest where autocomplete returned no match — the email is still added, but the no-match hint usually means a typo.
+
+6. **Trigger the Zoom add-on:**
+   - Find the conferencing button — label is "Add Google Meet video conferencing" if Meet is the default, "Add video conferencing" otherwise.
+   - It's a **split button**: clicking the main face adds Meet immediately. Click the **dropdown arrow** to the right instead.
+   - Select **Zoom Meeting** from the dropdown.
+   - Wait 1–3 seconds for the add-on dispatch. A "Joining info" section with a Zoom URL appears once it completes.
+   - If "Zoom Meeting" isn't in the dropdown, the add-on isn't installed for this account — stop, fall back to API path with `--conference zoom`.
+
+7. Optionally fill the description.
+
+8. Click **Save** (top right).
+
+9. Handle the "Send invitation emails?" dialog: **Send** (default) or **Don't send** (only when the meeting is explicitly self-only). Same consent rules as the API path.
+
+10. After save, extract: the event link (Calendar URLs include `?eid=<base64>`) and the Zoom join URL from the event's "Joining info" panel (snapshot, parse).
+
+11. Echo the event link + Zoom URL to the user. `browser_close()` unless the user is likely to inspect the event next.
+
+**Failure modes specific to this path:**
+- **Signed out** → redirect to `accounts.google.com`. Stop, report, do not type credentials.
+- **No "Zoom Meeting" option in the dropdown** → add-on not installed for this account. Fall back to API path.
+- **Add-on dispatch hangs >15s** → screenshot, report. The dispatch reaches Zoom's Apps Script deployment via Google's internal RPC; transient outages happen.
+- **Save fails with overlap warning** → conflict probe in `freebusy.py` may have had stale data; re-verify and pick a new slot.
+- **Mid-flow sign-in challenge** → session cookies rotated (the `__Secure-1PSIDTS` pair rotates every few hours). Abort, ask the user to refresh the Calendar session in the Playwright profile, retry.
+
+**Why this lives separately:** Google's public Calendar API restricts `createRequest.conferenceSolutionKey.type` to `hangoutsMeet` only — no path to invoke a Workspace add-on's conference dispatch from the API. The internal RPC the UI uses requires session cookies + SAPISIDHASH auth that are impractical to forge from a script (and unmaintainable across Google's wire-format rotations). Driving the UI is the stable way to reach that dispatch until Google exposes it publicly.
+
+**Helpers:** the deterministic pieces of this flow (time/date string formatting for the picker inputs, parsing `?eid=` from the post-save URL, extracting the Zoom URL from a snapshot blob, shaping the response) live in `book_browser_helpers.py` so they're unit-testable independently of the MCP recipe. Import inline when you need them, e.g.:
+```bash
+uv run python -c "import sys; sys.path.insert(0, '$(dirname \"$0\")'); \
+  from book_browser_helpers import format_time_picker; \
+  import datetime as dt; \
+  print(format_time_picker(dt.time(13, 30)))"
+# → "1:30 PM"
+```
 
 ## Logging outcomes after an ask
 
