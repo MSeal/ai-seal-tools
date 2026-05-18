@@ -287,6 +287,51 @@ def test_pin_mcp_json_skips_when_template_missing(tmp_path):
     assert not mcp.exists()
 
 
+def test_pin_mcp_json_pins_npm_registry_to_public(tmp_path):
+    """npx-launched servers get NPM_CONFIG_REGISTRY pinned to public npm.
+    On work machines, ~/.npmrc routes through CodeArtifact (token expires
+    every ~12 hours → E401 → silent MCP launch failure). Public registry
+    in env bypasses that for MCP fetches."""
+    template = tmp_path / ".mcp.json.template"
+    mcp = tmp_path / ".mcp.json"
+    _write_mcp(template, "npx", ["@playwright/mcp@latest"])
+    runtimes = {"NODE": "/opt/node/v26/bin/node"}
+
+    ins.pin_mcp_json(template, mcp, runtimes, dry=False)
+    env = json.loads(mcp.read_text())["mcpServers"]["playwright"]["env"]
+    assert env["NPM_CONFIG_REGISTRY"] == "https://registry.npmjs.org/"
+
+
+def test_pin_mcp_json_does_not_clobber_template_registry(tmp_path):
+    """If the template explicitly sets a registry (rare — e.g., testing
+    against a staging npm), the installer respects it via setdefault."""
+    template = tmp_path / ".mcp.json.template"
+    mcp = tmp_path / ".mcp.json"
+    _write_mcp(
+        template,
+        "npx",
+        ["@playwright/mcp@latest"],
+        env={"NPM_CONFIG_REGISTRY": "https://staging-npm.example.com/"},
+    )
+    runtimes = {"NODE": "/opt/node/v26/bin/node"}
+
+    ins.pin_mcp_json(template, mcp, runtimes, dry=False)
+    env = json.loads(mcp.read_text())["mcpServers"]["playwright"]["env"]
+    assert env["NPM_CONFIG_REGISTRY"] == "https://staging-npm.example.com/"
+
+
+def test_pin_mcp_json_does_not_pin_registry_for_non_npx(tmp_path):
+    """Non-npx commands don't fetch from npm at all; no env injection."""
+    template = tmp_path / ".mcp.json.template"
+    mcp = tmp_path / ".mcp.json"
+    _write_mcp(template, "chewie", ["mcp-server", "serve"])
+    runtimes = {"NODE": "/opt/node/v26/bin/node"}
+
+    ins.pin_mcp_json(template, mcp, runtimes, dry=False)
+    server = json.loads(mcp.read_text())["mcpServers"]["playwright"]
+    assert "env" not in server
+
+
 def test_pin_mcp_json_regenerates_canonical_when_mcp_drifted(tmp_path):
     """If something modified .mcp.json (e.g. an old install pass), running
     again from the template overwrites it back to the canonical+env form."""

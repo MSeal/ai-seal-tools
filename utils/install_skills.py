@@ -145,16 +145,27 @@ def write_skill_env(src: Path, runtimes: dict[str, str], dry: bool) -> str:
     return action
 
 
+PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org/"
+
+
 def pin_mcp_json(template_file: Path, mcp_file: Path, runtimes: dict[str, str], dry: bool) -> str:
     """Materialize `mcp_file` from `template_file` with machine-specific
-    env.PATH injected for any npx-launched server.
+    env injected for any npx-launched server:
+
+    - `PATH` is rewritten to lead with the captured node's bin directory,
+      defeating nvm version drift between shells.
+    - `NPM_CONFIG_REGISTRY` is pinned to the public npm registry. On work
+      machines, `~/.npmrc` routes npm through Confluent's CodeArtifact,
+      whose auth tokens expire every ~12 hours. When the token expires,
+      `npx <package>` returns E401 silently and the MCP server fails to
+      launch in fresh sessions. Public registry is the right default for
+      MCP packages anyway — they're all published there.
 
     Source of truth is `.mcp.json.template` (committed, canonical). The
-    generated `.mcp.json` (gitignored) carries the env.PATH injection that
-    pins MCP servers to the captured node version — defeats nvm version
-    drift between shells. Reading from the template each run keeps the
-    generated file from accumulating cruft and means the env injection is
-    always relative to the canonical command/args.
+    generated `.mcp.json` (gitignored) carries the env injection. Reading
+    from the template each run keeps the generated file from accumulating
+    cruft and means the env injection is always relative to the canonical
+    command/args.
 
     Confluent's MDM allowlist gates MCP loading on a literal match of
     `command` + `args` (see CLAUDE memory `mdm-mcp-allowlist`). The
@@ -176,6 +187,7 @@ def pin_mcp_json(template_file: Path, mcp_file: Path, runtimes: dict[str, str], 
         existing = env.get("PATH", os.environ.get("PATH", ""))
         parts = [p for p in existing.split(os.pathsep) if p and p != node_bin]
         env["PATH"] = os.pathsep.join([node_bin, *parts])
+        env.setdefault("NPM_CONFIG_REGISTRY", PUBLIC_NPM_REGISTRY)
         server["env"] = env
 
     rendered = json.dumps(data, indent=2) + "\n"
