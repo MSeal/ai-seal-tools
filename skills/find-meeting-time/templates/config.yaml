@@ -28,3 +28,25 @@ working_hours:
 #     start: 2026-05-13
 #     end:   2026-05-16
 #     note:  NYC travel
+
+# Used by create_event.py when booking a chosen slot.
+# - default_conference: zoom | zoom-pool | meet | none. Picks how the
+#   conference link is attached when --conference isn't passed.
+# - zoom_personal_meeting_url: your Zoom personal room URL. Attached
+#   when `--conference zoom` is selected. Usually
+#   https://<org>.zoom.us/my/<handle>.
+# - zoom_fallback_rooms: list of static Zoom URLs. `--conference
+#   zoom-pool` rotates through these deterministically (by slot start)
+#   so back-to-back meetings don't collide on the personal room.
+#
+# Programmatic note: Google's public Calendar API doesn't expose a way
+# to trigger the Zoom Workspace add-on dispatch (that's an internal
+# Google RPC the UI uses, not part of the public API). We attach
+# hand-crafted conferenceData with the URL instead — the Calendar UI
+# still renders a Join Zoom Meeting button on the event.
+#
+# default_conference: zoom
+# zoom_personal_meeting_url: "https://confluent.zoom.us/my/mseal"
+# zoom_fallback_rooms:
+#   - "https://confluent.zoom.us/j/1234567890?pwd=abc"
+#   - "https://confluent.zoom.us/j/2345678901?pwd=def"

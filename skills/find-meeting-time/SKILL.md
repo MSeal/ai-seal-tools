@@ -169,6 +169,43 @@ matter (cross-team coordination, anything tied to org leadership).
 Sparse curation. The user can always run record_seniority.py by hand
 for entries they want pinned.
 
+## Booking the chosen slot
+
+After the user explicitly says "book it" / "schedule it" / "create the event" / "send the invite" (or equivalent), call `create_event.py` to materialize the slot as a real Calendar event with attendees and a conference link.
+
+```bash
+uv run --script "$(dirname "$0")/create_event.py" \
+  --start <slot start ISO 8601 with offset> \
+  --end   <slot end ISO 8601 with offset> \
+  --summary "<event title — usually derived from the meeting purpose>" \
+  --attendees <comma-separated required-attendee emails> \
+  [--conference zoom|zoom-pool|meet|none]   # default from config.yaml
+  [--zoom-url <ad-hoc Zoom URL>]            # override personal/pool
+  [--description "<context>"]
+  [--dry-run]                                # preview body without calling API
+```
+
+**Rules of engagement:**
+
+- **Confirm before sending invites to others.** Picking a slot in chat ("Mon 1:30 works") is not the same as authorizing invites to go out. If the user hasn't used an explicit booking verb, propose what you'd send (summary, attendees, conference type) and wait for a "yes". Once they say "book it" with an explicit verb, you have consent for that single event — don't keep booking subsequent events implicitly.
+
+- **Conference choice:**
+  - Default (most cases): use `--conference` from `config.yaml` (typically `zoom`, meaning the personal meeting room). One-on-ones and casual internal meetings.
+  - **`zoom-pool`**: when the user mentions back-to-back meetings, multiple parallel calls, or has explicitly asked for unique rooms. Deterministically rotates through `zoom_fallback_rooms`.
+  - **`meet`**: when the user prefers Google Meet (asks for "Meet" explicitly, or when Zoom isn't configured and they want something working immediately).
+  - **`none`**: in-person events, holds, focus blocks, anything that doesn't need a join link.
+  - **`--zoom-url`**: ad-hoc override for when a specific Zoom URL was provided (a customer sent one, etc.).
+
+- **Use a `--summary` that reads well in invitees' inboxes.** Not "[Meeting]" or "Quick chat". Be specific: "AI tooling sync — mseal + eve", "Hiring debrief: <candidate>", etc. Pull from the conversation context.
+
+- **Pass attendee emails resolved by the Slack-ref tool**, not raw `@handles`. By the time you're calling `create_event.py`, every attendee should be a `<local>@example.com` form.
+
+- **Echo the result** to the user with the event's `html_link` for click-to-edit and the `join_url` for the conference link. If `conference_status` flags an issue (missing join URL when one was expected), retry once with `--conference meet` and call out the swap, or fall back to surfacing the bare event link and let the user fix conferencing manually.
+
+- **Don't auto-log this as an outcome** — `record_outcome.py` is for tracking who-said-what-when-asked-to-move, not for event-creation events.
+
+The first run after upgrading from a read-only `freebusy.py` will pop a browser for the broader write scope (the auth path's scope-mismatch detector handles it). User clicks through once; new token caches separately at `~/.config/ai-seal-tools/credentials/google_calendar_write_token.json`.
+
 ## Logging outcomes after an ask
 
 After the user reports back on how an ask went, log the outcome with `record_outcome.py` so future runs learn from it:

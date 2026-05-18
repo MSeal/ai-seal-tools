@@ -276,12 +276,42 @@ working_hours:
 #     note:  NYC travel
 ```
 
+`config.yaml` is also where `create_event.py` (the booking helper that
+turns a chosen slot into a Calendar event) picks up its conferencing
+defaults:
+
+```yaml
+# default_conference: zoom | zoom-pool | meet | none
+# zoom_personal_meeting_url: "https://confluent.zoom.us/my/mseal"
+# zoom_fallback_rooms:
+#   - "https://confluent.zoom.us/j/1234567890?pwd=..."
+#   - "https://confluent.zoom.us/j/2345678901?pwd=..."
+```
+
+- `zoom` uses your personal room; `zoom-pool` rotates deterministically
+  through the fallback list (by slot start time) so back-to-back events
+  don't collide on the same URL.
+- Google's public Calendar API doesn't expose the Zoom Workspace
+  add-on's create-conference dispatch — that lives in an internal
+  Google RPC the Calendar UI calls. `create_event.py` instead attaches
+  the Zoom URL as hand-crafted `conferenceData` directly on the event;
+  the Calendar UI still renders a Join Zoom Meeting button.
+- For per-event Zoom rooms (vs reusing personal/pool URLs), see the
+  backlog — needs either a Playwright-driven UI path or a Zoom REST
+  API integration.
+
 CLI overrides for one-off queries:
 
 ```bash
+# Override working hours for a single query
 uv run --script .../freebusy.py [...] \
   --work-start 10:00 --work-end 18:00 \
   --config /path/to/other-config.yaml
+
+# Override the Zoom URL for one booking (without changing config.yaml)
+uv run --script .../create_event.py [...] \
+  --conference zoom \
+  --zoom-url https://confluent.zoom.us/j/special-meeting
 ```
 
 ### `score_weights.yaml` — tunable scoring magnitudes

@@ -42,7 +42,6 @@ import argparse
 import dataclasses
 import datetime as dt
 import json
-import os
 import re
 import sys
 from dataclasses import dataclass
@@ -50,22 +49,20 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from google.auth import default as adc_default
-from google.auth.exceptions import DefaultCredentialsError, RefreshError
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google.oauth2.service_account import Credentials as ServiceAccountCredentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+# Resolve sibling modules (auth.py, seniority.py) without packaging.
+sys.path.insert(0, str(SCRIPT_DIR))
+import auth  # noqa: E402
+from seniority import load_seniority, tier_for  # noqa: E402
+
 SCOPES = ["https://www.googleapis.com/auth/calendar.events.readonly"]
-CONFIG_DIR = Path.home() / ".config" / "ai-seal-tools"
-# Credentials live in a dedicated subdir (mode 0700) so the "never sync this"
-# boundary is enforced by the filesystem, not by naming convention.
-CREDENTIALS_DIR = CONFIG_DIR / "credentials"
-SERVICE_ACCOUNT = CREDENTIALS_DIR / "google_service_account.json"
-CLIENT_SECRETS = CREDENTIALS_DIR / "google_oauth_client.json"
+CONFIG_DIR = auth.CONFIG_DIR
+CREDENTIALS_DIR = auth.CREDENTIALS_DIR
+SERVICE_ACCOUNT = auth.SERVICE_ACCOUNT
+CLIENT_SECRETS = auth.CLIENT_SECRETS
 TOKEN_FILE = CREDENTIALS_DIR / "google_token.json"
 SKILL_CONFIG_DIR = CONFIG_DIR / "find-meeting-time"
 CONFIG_FILE = SKILL_CONFIG_DIR / "config.yaml"
@@ -73,13 +70,8 @@ PREFERENCES_FILE = SKILL_CONFIG_DIR / "preferences.md"
 OUTCOMES_FILE = SKILL_CONFIG_DIR / "outcomes.jsonl"
 SENIORITY_FILE = SKILL_CONFIG_DIR / "seniority.yaml"
 
-SCRIPT_DIR = Path(__file__).resolve().parent
 SCORE_WEIGHTS_FILE = SCRIPT_DIR / "score_weights.yaml"
 SCORE_WEIGHTS_LOCAL_FILE = SCRIPT_DIR / "score_weights.local.yaml"
-
-# Resolve sibling modules (seniority.py) without packaging.
-sys.path.insert(0, str(SCRIPT_DIR))
-from seniority import load_seniority, tier_for  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -342,84 +334,12 @@ def _effective_tz_for(
 
 
 # ----------------------------------------------------------------------------
-# Auth
+# Auth — delegates to auth.py so create_event.py (write scope) shares the
+# same credential lifecycle without code duplication.
 # ----------------------------------------------------------------------------
 
-def _write_secret(path: Path, content: str) -> None:
-    """Write content to `path` atomically with mode 0o600, even if `path`
-    pre-existed with looser perms.
-
-    The naive O_CREAT|O_TRUNC re-uses an existing inode and keeps its old
-    permissions — meaning a token file that was once 644 stays 644 forever.
-    Instead, write to a fresh tmp file with O_EXCL (so we're guaranteed a
-    new inode with 0o600 perms), then atomically rename over the target.
-    Side benefit: crash-safe — `path` is either the old content or the new
-    content, never half-written.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp.unlink()
-    except FileNotFoundError:
-        pass
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
-    tmp.replace(path)
-
-
 def get_credentials(impersonate: str | None = None):
-    if SERVICE_ACCOUNT.exists():
-        sa = ServiceAccountCredentials.from_service_account_file(
-            str(SERVICE_ACCOUNT), scopes=SCOPES
-        )
-        if impersonate:
-            sa = sa.with_subject(impersonate)
-        return sa
-
-    if TOKEN_FILE.exists():
-        # Inspect granted scopes from the stored JSON (creds.scopes after load
-        # reflects what we *requested*, not what the token was issued with).
-        granted = set(json.loads(TOKEN_FILE.read_text()).get("scopes", []))
-        missing = set(SCOPES) - granted
-        if missing:
-            print(
-                f"[freebusy.py] cached token is missing required scopes "
-                f"({missing}); redoing consent.",
-                file=sys.stderr,
-            )
-            TOKEN_FILE.unlink()
-        else:
-            creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
-            if creds.valid:
-                return creds
-            if creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-                _write_secret(TOKEN_FILE, creds.to_json())
-                return creds
-
-    if CLIENT_SECRETS.exists():
-        flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS), SCOPES)
-        creds = flow.run_local_server(port=0)
-        _write_secret(TOKEN_FILE, creds.to_json())
-        return creds
-
-    adc_error: str | None = None
-    try:
-        creds, _ = adc_default(scopes=SCOPES)
-        creds.refresh(Request())
-        return creds
-    except (DefaultCredentialsError, RefreshError) as e:
-        adc_error = f"{type(e).__name__}: {e}"
-
-    sys.exit(
-        "No usable Google Calendar credentials found.\n"
-        f"  Expected one of:\n"
-        f"    {CLIENT_SECRETS}   (OAuth Desktop client — most common)\n"
-        f"    {SERVICE_ACCOUNT}  (service account + DWD — for cross-user access)\n"
-        f"  See skills/find-meeting-time/SETUP.md for step-by-step setup.\n"
-        f"  ADC fallback attempt failed with: {adc_error}"
-    )
+    return auth.get_credentials(SCOPES, TOKEN_FILE, impersonate=impersonate)
 
 
 # ----------------------------------------------------------------------------
