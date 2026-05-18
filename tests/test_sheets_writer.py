@@ -168,6 +168,8 @@ class _FakeValuesAPI:
         self.get_calls = []
         self.update_calls = []
         self.clear_calls = []
+        self.batch_update_calls = []
+        self.append_calls = []
 
     def get(self, **kwargs):
         self.get_calls.append(kwargs)
@@ -180,6 +182,23 @@ class _FakeValuesAPI:
     def clear(self, **kwargs):
         self.clear_calls.append(kwargs)
         return _FakeExecutor({"clearedRange": kwargs["range"]})
+
+    def batchUpdate(self, **kwargs):
+        self.batch_update_calls.append(kwargs)
+        n = sum(
+            len(d["values"]) * (len(d["values"][0]) if d["values"] else 0)
+            for d in kwargs["body"]["data"]
+        )
+        return _FakeExecutor({"totalUpdatedCells": n, "responses": kwargs["body"]["data"]})
+
+    def append(self, **kwargs):
+        self.append_calls.append(kwargs)
+        return _FakeExecutor({
+            "updates": {
+                "updatedRange": kwargs["range"],
+                "updatedRows": len(kwargs["body"]["values"]),
+            }
+        })
 
 
 class _FakeExecutor:
@@ -246,6 +265,78 @@ def test_cmd_clear_invokes_values_clear(capsys):
     assert out["clearedRange"] == "Sheet1!A1:Z"
     [call] = svc.spreadsheets()._values.clear_calls
     assert call == {"spreadsheetId": "sid-123", "range": "Sheet1!A1:Z", "body": {}}
+
+
+def test_cmd_cell_wraps_scalar_into_2d_block(capsys):
+    """cmd_cell is a thin shim that calls values().update() with [[value]]."""
+    svc = _FakeService()
+    sw.cmd_cell(svc, "sid-123", "Sheet1!B3", "Terminal")
+    out = json.loads(capsys.readouterr().out)
+    assert out["updatedRange"] == "Sheet1!B3"
+    [call] = svc.spreadsheets()._values.update_calls
+    assert call["spreadsheetId"] == "sid-123"
+    assert call["range"] == "Sheet1!B3"
+    assert call["valueInputOption"] == "USER_ENTERED"
+    assert call["body"] == {"values": [["Terminal"]]}
+
+
+def test_cmd_batch_forwards_array_to_batch_update(monkeypatch, capsys):
+    """batch payload reaches values().batchUpdate() unchanged, with
+    USER_ENTERED set by us (not the caller)."""
+    svc = _FakeService()
+    updates = [
+        {"range": "Sheet1!A3", "values": [["Terminal"]]},
+        {"range": "Sheet1!D5:D7", "values": [["a"], ["b"], ["c"]]},
+    ]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(updates)))
+    sw.cmd_batch(svc, "sid-123")
+    out = json.loads(capsys.readouterr().out)
+    # 1 + 3 = 4 cells touched, fake API echoes them
+    assert out["totalUpdatedCells"] == 4
+    [call] = svc.spreadsheets()._values.batch_update_calls
+    assert call["spreadsheetId"] == "sid-123"
+    assert call["body"]["valueInputOption"] == "USER_ENTERED"
+    assert call["body"]["data"] == updates
+
+
+def test_cmd_batch_rejects_non_array_input(monkeypatch):
+    """Anything other than `[{range, values}, ...]` is a config error, not a
+    silently-misshapen API call. Exit early with a clear message."""
+    svc = _FakeService()
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"range": "A1", "values": [["x"]]}'))
+    with pytest.raises(SystemExit) as exc:
+        sw.cmd_batch(svc, "sid-123")
+    assert "batch input must be a JSON array" in str(exc.value)
+    # And nothing was sent to the API
+    assert svc.spreadsheets()._values.batch_update_calls == []
+
+
+def test_cmd_batch_rejects_array_with_malformed_entries(monkeypatch):
+    svc = _FakeService()
+    monkeypatch.setattr(
+        sys, "stdin",
+        io.StringIO('[{"range": "A1"}]'),  # missing 'values'
+    )
+    with pytest.raises(SystemExit):
+        sw.cmd_batch(svc, "sid-123")
+    assert svc.spreadsheets()._values.batch_update_calls == []
+
+
+def test_cmd_append_uses_insert_rows_option(monkeypatch, capsys):
+    """append() must set insertDataOption=INSERT_ROWS so existing rows below
+    the table aren't overwritten — Sheets' default OVERWRITE has bitten us."""
+    svc = _FakeService()
+    rows = [["a", "b"], ["c", "d"]]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(rows)))
+    sw.cmd_append(svc, "sid-123", "Sheet1!A:F")
+    out = json.loads(capsys.readouterr().out)
+    assert out["updates"]["updatedRows"] == 2
+    [call] = svc.spreadsheets()._values.append_calls
+    assert call["spreadsheetId"] == "sid-123"
+    assert call["range"] == "Sheet1!A:F"
+    assert call["valueInputOption"] == "USER_ENTERED"
+    assert call["insertDataOption"] == "INSERT_ROWS"
+    assert call["body"] == {"values": rows}
 
 
 def test_cmd_meta_summarizes_spreadsheet(capsys):
