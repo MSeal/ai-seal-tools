@@ -334,26 +334,53 @@ These are heuristics. The user's judgment overrides — if Alice's "1:1" is with
 
 ## Rendering the answer
 
-Default output structure:
+**Always render each top slot via `render_slot.py`** — it produces a consistent header + ASCII timeline that shows the layout of conflicts across all attendees. Don't hand-format slot cards; the renderer's contract is what tests lock in.
+
+```bash
+# Save freebusy output to a temp file, then render the top N slots:
+TMP=$(mktemp); ...freebusy.py ... > $TMP
+uv run --script "$(dirname "$0")/render_slot.py" \
+  --from "$TMP" \
+  --attendees mseal@confluent.io,alice@example.com \
+  --requester mseal@confluent.io \
+  --names "mseal@confluent.io=Matthew Seal,alice@example.com=Alice Example" \
+  --top 5
+```
+
+**Always pass `--names`** with the full display name for every attendee — using `firstname.lastname` or the email handle as the row label trades scannability for ~no work saved. By the time you call the renderer you've already resolved each attendee to an email (via Glean lookups, the Slack-ref cache, or directly from the user). Pass the same resolution results through as the names mapping: `"email1=First Last,email2=First Last,…"`. The renderer falls back to email local-part for unmapped entries — no display crash, just less readable.
+
+The renderer outputs each slot as:
+
+```
+N. **<Day, Mon D> · <start>–<end>** (<N> min) — Score <N> · <one-line summary>
+```
+                    H:MM   H:MM   H:MM   H:MM
+mseal (you)         ─────  ─────  ─────       (no conflict → clean dashes)
+alice               ░░░░░  ░░░░░  ─────       "Conflict name" (movability 8)
+```
+```
+
+Glyphs encode movability at a glance: `─` free, `░` easy (movability 7+), `▓` moderate (4–6), `█` ⚠ fixed (≤ 3), `?` opaque. The requester's row gets a `(you)` annotation in the label and a `← you` marker on any conflict annotation. Above 6 attendees with conflicts the timeline collapses into a flat list — at that density it's a coordination problem, not a scheduling one.
+
+The full structure of your reply, wrapping the slot cards:
 
 ```
 Meeting: <duration> with <attendees> between <start date> and <end date> (<timezone>)
 
 Top recommendations:
 
-1. **<Day, Date> <start>–<end>** — Score <score>/100
-   <one-line reason: "All free" / "1 movable conflict" / etc.>
+<slot card 1 from render_slot.py>
 
-2. **<Day, Date> <start>–<end>** — Score <score>/100
-   <one-line reason>
+<slot card 2>
 
-   *Ask Alice:*
-   > <a 2–4 sentence pre-formatted message, see rendering rules below>
+…
 
-3. ...
-
-Notes:
+Tradeoffs / Notes:
+- <inter-slot tradeoff calls (when top scores are within ~15 and have different conflict signatures)>
 - <calendars not visible, attendees declined, timezone math, etc.>
+
+*Ask <Name>:*
+> <2–4 sentence ask-message — only render for visible+movable conflicts on top-3 slots>
 ```
 
 ### Rendering rules
