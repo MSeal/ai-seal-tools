@@ -12,8 +12,8 @@ import seniority_glean
 def test_parse_glean_record_full_shape():
     """The realistic full shape we observed from app=people during scoping."""
     record = {
-        "name": "Example User",
-        "email": "you@example.com",
+        "name": "Matthew Seal",
+        "email": "mseal@confluent.io",
         "title": "Principal Engineer II",
         "department": "Cloud Infrastructure & Platform",
         "teams": ["CIP - Experiences", "Cloud Infrastructure & Platform", "Announcements Global"],
@@ -28,7 +28,7 @@ def test_parse_glean_record_full_shape():
     }
     fields = seniority_glean.parse_glean_record(record)
     assert isinstance(fields, seniority.SeniorityFields)
-    assert fields.email == "you@example.com"
+    assert fields.email == "mseal@confluent.io"
     assert fields.title == "Principal Engineer II"
     assert fields.department == "Cloud Infrastructure & Platform"
     assert fields.teams == (

@@ -32,7 +32,7 @@ Usage:
       --start 2026-05-14T09:00 \\
       --end   2026-05-22T17:00 \\
       --duration 60 \\
-      [--impersonate you@example.com] \\
+      [--impersonate mseal@confluent.io] \\
       [--top 5]
 """
 

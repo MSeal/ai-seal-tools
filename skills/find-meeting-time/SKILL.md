@@ -18,7 +18,7 @@ UV_NO_CONFIG=1 uv run --script "$(dirname "$0")/freebusy.py" \
   --start  <ISO 8601> \
   --end    <ISO 8601> \
   --duration <minutes> \
-  [--impersonate you@example.com]    # only with service account
+  [--impersonate mseal@confluent.io]    # only with service account
   [--top 5]                              # how many ranked slots to return
 ```
 
@@ -37,7 +37,7 @@ Include the **requester's own email** in `--emails` — their conflicts matter t
 - `45 min sync with Carol, Dave, and Eve before Friday`
 
 Resolve the inputs into a concrete plan:
-- **Attendees**: emails preferred; names are OK if Google Calendar's autocomplete will find them in the Confluent directory. Always include the requester (`you@example.com` unless specified otherwise).
+- **Attendees**: emails preferred; names are OK if Google Calendar's autocomplete will find them in the Confluent directory. Always include the requester (`mseal@confluent.io` unless specified otherwise).
 - **Slack references** (`@handle` and `#channel`): resolve to emails *before* invoking `freebusy.py`. See the "Resolving Slack references" section below.
 - **Duration**: default 30 min if not specified.
 - **Date range**: convert relative phrases to absolute dates using today's date from the system context. **Always pass `--start >= now`**: never query for slots in the past. If the user says "this week" and it's already mid-afternoon Friday, snap `--start` to the next business-day morning rather than rewinding to Monday. **Never propose a slot whose start time has already passed** at the time of response. Default to the next 5 business days if unspecified.
@@ -67,7 +67,7 @@ A real Slack MCP would replace the Glean fallback with authoritative lookups; th
 
 ```json
 {
-  "attendees": ["you@example.com", "alice@example.com"],
+  "attendees": ["mseal@confluent.io", "alice@example.com"],
   "range": {"start": "...", "end": "..."},
   "duration_minutes": 60,
   "working_hours": {"start": 9, "end": 17},
@@ -341,9 +341,9 @@ These are heuristics. The user's judgment overrides — if Alice's "1:1" is with
 TMP=$(mktemp); ...freebusy.py ... > $TMP
 uv run --script "$(dirname "$0")/render_slot.py" \
   --from "$TMP" \
-  --attendees you@example.com,alice@example.com \
-  --requester you@example.com \
-  --names "you@example.com=Example User,alice@example.com=Alice Lee" \
+  --attendees mseal@confluent.io,alice@example.com \
+  --requester mseal@confluent.io \
+  --names "mseal@confluent.io=Matthew Seal,alice@example.com=Alice Lee" \
   --top 5
 ```
 

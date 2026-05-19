@@ -19,7 +19,7 @@ ZOOM_EVENT = {
     "htmlLink": "https://www.google.com/calendar/event?eid=N2pzaDR0a2VqcmM2MmNhaTBtaHJmajB1dDQg",
     "start": {"dateTime": "2026-05-18T16:30:00-07:00"},
     "end": {"dateTime": "2026-05-18T17:00:00-07:00"},
-    "attendees": [{"email": "you@example.com"}],
+    "attendees": [{"email": "mseal@confluent.io"}],
     "conferenceData": {
         "conferenceSolution": {"name": "Zoom Meeting", "key": {"type": "addOn"}},
         "entryPoints": [

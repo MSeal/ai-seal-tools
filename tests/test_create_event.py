@@ -72,12 +72,12 @@ def test_build_body_marks_organizer_accepted_when_in_attendees():
         _dt("2026-05-18T13:30:00-07:00"),
         _dt("2026-05-18T14:00:00-07:00"),
         summary="x",
-        attendees=["you@example.com", "alice@example.com"],
+        attendees=["mseal@confluent.io", "alice@example.com"],
         conference="none",
-        organizer_email="you@example.com",
+        organizer_email="mseal@confluent.io",
     )
     assert body["attendees"] == [
-        {"email": "you@example.com", "responseStatus": "accepted"},
+        {"email": "mseal@confluent.io", "responseStatus": "accepted"},
         {"email": "alice@example.com"},
     ]
 
@@ -89,12 +89,12 @@ def test_build_body_organizer_match_is_case_insensitive():
         _dt("2026-05-18T13:30:00-07:00"),
         _dt("2026-05-18T14:00:00-07:00"),
         summary="x",
-        attendees=["You@Example.com"],
+        attendees=["MSeal@Confluent.io"],
         conference="none",
-        organizer_email="you@Example.com",
+        organizer_email="mseal@Confluent.io",
     )
     assert body["attendees"] == [
-        {"email": "you@example.com", "responseStatus": "accepted"},
+        {"email": "mseal@confluent.io", "responseStatus": "accepted"},
     ]
 
 
@@ -123,7 +123,7 @@ def test_build_body_organizer_not_in_attendees_no_op():
         summary="self-only hold",
         attendees=["someone-else@x"],
         conference="none",
-        organizer_email="you@example.com",
+        organizer_email="mseal@confluent.io",
     )
     assert body["attendees"] == [{"email": "someone-else@x"}]
 
@@ -240,18 +240,18 @@ def test_ensure_organizer_accepted_patches_when_needs_action():
     them to accepted with sendUpdates='none'."""
     svc = mock.MagicMock()
     patched_response = _event_with_organizer(
-        "you@example.com",
+        "mseal@confluent.io",
         [
-            {"email": "you@example.com", "responseStatus": "accepted"},
+            {"email": "mseal@confluent.io", "responseStatus": "accepted"},
             {"email": "alice@example.com"},
         ],
     )
     svc.events.return_value.patch.return_value.execute.return_value = patched_response
 
     event = _event_with_organizer(
-        "you@example.com",
+        "mseal@confluent.io",
         [
-            {"email": "you@example.com", "responseStatus": "needsAction"},
+            {"email": "mseal@confluent.io", "responseStatus": "needsAction"},
             {"email": "alice@example.com"},
         ],
     )
@@ -262,7 +262,7 @@ def test_ensure_organizer_accepted_patches_when_needs_action():
     assert call.kwargs["sendUpdates"] == "none"
     assert call.kwargs["eventId"] == "abc"
     body_attendees = call.kwargs["body"]["attendees"]
-    self_entry = next(a for a in body_attendees if a["email"] == "you@example.com")
+    self_entry = next(a for a in body_attendees if a["email"] == "mseal@confluent.io")
     assert self_entry["responseStatus"] == "accepted"
     assert result == patched_response
 
@@ -272,9 +272,9 @@ def test_ensure_organizer_accepted_noop_when_already_accepted():
     sent — saves a round-trip and avoids any side effects."""
     svc = mock.MagicMock()
     event = _event_with_organizer(
-        "you@example.com",
+        "mseal@confluent.io",
         [
-            {"email": "you@example.com", "responseStatus": "accepted"},
+            {"email": "mseal@confluent.io", "responseStatus": "accepted"},
             {"email": "alice@example.com"},
         ],
     )
@@ -288,7 +288,7 @@ def test_ensure_organizer_accepted_noop_when_organizer_not_in_attendees():
     nothing to patch."""
     svc = mock.MagicMock()
     event = _event_with_organizer(
-        "you@example.com",
+        "mseal@confluent.io",
         [{"email": "alice@x", "responseStatus": "needsAction"}],
     )
     result = ce._ensure_organizer_accepted(svc, event)
@@ -317,8 +317,8 @@ def test_ensure_organizer_accepted_swallows_http_errors(capsys):
     svc.events.return_value.patch.return_value.execute.side_effect = err
 
     event = _event_with_organizer(
-        "you@example.com",
-        [{"email": "you@example.com", "responseStatus": "needsAction"}],
+        "mseal@confluent.io",
+        [{"email": "mseal@confluent.io", "responseStatus": "needsAction"}],
     )
     result = ce._ensure_organizer_accepted(svc, event)
     assert result is event  # original returned

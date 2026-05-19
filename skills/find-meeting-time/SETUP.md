@@ -53,7 +53,7 @@ client JSON. In that case use the [TL;DR](#tldr--fresh-machine-credentials-alrea
 
 ### Prerequisites
 
-- A Confluent Google account (`you@example.com`)
+- A Confluent Google account (`mseal@confluent.io`)
 - A GCP project you own or admin (a personal dev project is fine; need not
   involve IT for this path). If you don't have one: `console.cloud.google.com`
   → top-bar project picker → New Project. Project ID like `you-devel`.
@@ -205,7 +205,7 @@ The skill reads two optional personal files. The real files live in
 without extra code. Two layers of symlinks point at the Drive target:
 
 ```
-~/Library/CloudStorage/GoogleDrive-you@example.com/
+~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/
    My Drive/ai-seal-tools/find-meeting-time/
      config.yaml        ← real file (synced by Drive Desktop)
      preferences.md     ← real file (synced by Drive Desktop)
@@ -228,7 +228,7 @@ Both files are created automatically the first time you run
 path get migrated to Drive on first run after this upgrade.
 
 **On a new machine:** install Google Drive Desktop, sign in as
-`you@example.com`, wait for the `ai-seal-tools/` folder to sync into
+`mseal@confluent.io`, wait for the `ai-seal-tools/` folder to sync into
 `~/Library/CloudStorage/...`, then run `uv run utils/install_skills.py`.
 The installer detects the synced files and creates the symlinks pointing
 at them; no manual file copy needed.
