@@ -63,6 +63,71 @@ def test_build_body_skips_empty_attendee_entries():
     assert body["attendees"] == [{"email": "alice@x"}, {"email": "bob@x"}]
 
 
+def test_build_body_marks_organizer_accepted_when_in_attendees():
+    """When organizer_email matches an attendee, that entry gets
+    responseStatus='accepted' baked into the insert body so Google
+    sees them as confirmed at create time. See memory
+    booking-marks-organizer-accepted."""
+    body = ce.build_event_body(
+        _dt("2026-05-18T13:30:00-07:00"),
+        _dt("2026-05-18T14:00:00-07:00"),
+        summary="x",
+        attendees=["mseal@confluent.io", "alice@example.com"],
+        conference="none",
+        organizer_email="mseal@confluent.io",
+    )
+    assert body["attendees"] == [
+        {"email": "mseal@confluent.io", "responseStatus": "accepted"},
+        {"email": "alice@example.com"},
+    ]
+
+
+def test_build_body_organizer_match_is_case_insensitive():
+    """The org email and the attendee email may differ in case (CSV
+    input vs. Google's canonical form); match leniently."""
+    body = ce.build_event_body(
+        _dt("2026-05-18T13:30:00-07:00"),
+        _dt("2026-05-18T14:00:00-07:00"),
+        summary="x",
+        attendees=["MSeal@Confluent.io"],
+        conference="none",
+        organizer_email="mseal@CONFLUENT.io",
+    )
+    assert body["attendees"] == [
+        {"email": "mseal@confluent.io", "responseStatus": "accepted"},
+    ]
+
+
+def test_build_body_no_organizer_email_means_no_response_status():
+    """When organizer_email is None (legacy callers, or before we know
+    who the organizer is), don't touch responseStatus — the post-insert
+    patch in main() handles it."""
+    body = ce.build_event_body(
+        _dt("2026-05-18T13:30:00-07:00"),
+        _dt("2026-05-18T14:00:00-07:00"),
+        summary="x",
+        attendees=["alice@x", "bob@x"],
+        conference="none",
+    )
+    for a in body["attendees"]:
+        assert "responseStatus" not in a
+
+
+def test_build_body_organizer_not_in_attendees_no_op():
+    """If the organizer is the host but not an explicit guest (e.g.,
+    they're the calendar owner running a self-only hold), there's no
+    matching attendee entry — body stays clean."""
+    body = ce.build_event_body(
+        _dt("2026-05-18T13:30:00-07:00"),
+        _dt("2026-05-18T14:00:00-07:00"),
+        summary="self-only hold",
+        attendees=["someone-else@x"],
+        conference="none",
+        organizer_email="mseal@confluent.io",
+    )
+    assert body["attendees"] == [{"email": "someone-else@x"}]
+
+
 def test_build_body_zoom_uses_hand_crafted_conference_data():
     """Zoom path attaches an existing URL via conferenceData (no
     createRequest, since Google's API only mints Meet that way)."""
@@ -154,6 +219,111 @@ def test_build_body_omits_description_when_empty():
         conference="none",
     )
     assert "description" not in body
+
+
+# ---------------------------------------------------------------------------
+# _ensure_organizer_accepted — defensive post-insert patch
+# ---------------------------------------------------------------------------
+
+
+def _event_with_organizer(organizer_email: str, attendees: list[dict]) -> dict:
+    return {
+        "id": "abc",
+        "organizer": {"email": organizer_email},
+        "attendees": attendees,
+    }
+
+
+def test_ensure_organizer_accepted_patches_when_needs_action():
+    """The organizer is in attendees but Google left them as needsAction
+    (e.g., service-account flow). _ensure_organizer_accepted patches
+    them to accepted with sendUpdates='none'."""
+    svc = mock.MagicMock()
+    patched_response = _event_with_organizer(
+        "mseal@confluent.io",
+        [
+            {"email": "mseal@confluent.io", "responseStatus": "accepted"},
+            {"email": "alice@example.com"},
+        ],
+    )
+    svc.events.return_value.patch.return_value.execute.return_value = patched_response
+
+    event = _event_with_organizer(
+        "mseal@confluent.io",
+        [
+            {"email": "mseal@confluent.io", "responseStatus": "needsAction"},
+            {"email": "alice@example.com"},
+        ],
+    )
+    result = ce._ensure_organizer_accepted(svc, event)
+
+    # Patch was called with sendUpdates='none' and accepted responseStatus.
+    call = svc.events.return_value.patch.call_args
+    assert call.kwargs["sendUpdates"] == "none"
+    assert call.kwargs["eventId"] == "abc"
+    body_attendees = call.kwargs["body"]["attendees"]
+    self_entry = next(a for a in body_attendees if a["email"] == "mseal@confluent.io")
+    assert self_entry["responseStatus"] == "accepted"
+    assert result == patched_response
+
+
+def test_ensure_organizer_accepted_noop_when_already_accepted():
+    """Idempotency: when the organizer is already accepted, no patch is
+    sent — saves a round-trip and avoids any side effects."""
+    svc = mock.MagicMock()
+    event = _event_with_organizer(
+        "mseal@confluent.io",
+        [
+            {"email": "mseal@confluent.io", "responseStatus": "accepted"},
+            {"email": "alice@example.com"},
+        ],
+    )
+    result = ce._ensure_organizer_accepted(svc, event)
+    svc.events.return_value.patch.assert_not_called()
+    assert result is event
+
+
+def test_ensure_organizer_accepted_noop_when_organizer_not_in_attendees():
+    """Self-only event (no attendees) or third-party-organizer event:
+    nothing to patch."""
+    svc = mock.MagicMock()
+    event = _event_with_organizer(
+        "mseal@confluent.io",
+        [{"email": "alice@x", "responseStatus": "needsAction"}],
+    )
+    result = ce._ensure_organizer_accepted(svc, event)
+    svc.events.return_value.patch.assert_not_called()
+    assert result is event
+
+
+def test_ensure_organizer_accepted_noop_when_no_organizer_field():
+    """Defensive — events.insert always returns organizer.email, but if
+    it ever doesn't, don't blow up."""
+    svc = mock.MagicMock()
+    event = {"id": "abc", "attendees": [{"email": "alice@x"}]}
+    result = ce._ensure_organizer_accepted(svc, event)
+    svc.events.return_value.patch.assert_not_called()
+    assert result is event
+
+
+def test_ensure_organizer_accepted_swallows_http_errors(capsys):
+    """If the patch fails (network blip, permissions edge case), the
+    event was still created — log a warning, return the original."""
+    from googleapiclient.errors import HttpError
+    svc = mock.MagicMock()
+    mock_resp = mock.MagicMock()
+    mock_resp.status = 403
+    err = HttpError(mock_resp, b'{"error": "denied"}')
+    svc.events.return_value.patch.return_value.execute.side_effect = err
+
+    event = _event_with_organizer(
+        "mseal@confluent.io",
+        [{"email": "mseal@confluent.io", "responseStatus": "needsAction"}],
+    )
+    result = ce._ensure_organizer_accepted(svc, event)
+    assert result is event  # original returned
+    captured = capsys.readouterr()
+    assert "failed to mark organizer accepted" in captured.err
 
 
 # ---------------------------------------------------------------------------

@@ -174,11 +174,11 @@ for entries they want pinned.
 After the user explicitly says "book it" / "schedule it" / "create the event" / "send the invite" (or equivalent), materialize the slot as a real Calendar event. Two execution paths exist, mirroring find-meeting-time's API-vs-browser split — kept separate so each can evolve independently:
 
 - **API path** — `create_event.py`. Fast and structured. Attaches a hand-crafted Zoom URL (your personal room or a pool rotation) or a Meet link. **Does NOT trigger the real Zoom Workspace add-on**: Google's public Calendar API doesn't expose that dispatch (see SETUP.md).
-- **Browser path (Plan B)** — Playwright drives Calendar's UI and clicks the Zoom add-on button. ~5–10s slower. Produces a fresh, Zoom-API-backed meeting URL via the real add-on dispatch.
+- **Hybrid path (Plan B)** — API creates the event with no conferencing (fast, returns event_id), then Playwright opens that event in the editor and clicks the Zoom add-on (3 clicks). API re-queries afterwards to capture the attached conferenceData. ~5s of Playwright on top of the API path.
 
 **The API path is the default.** It's faster, structured, and doesn't depend on browser session state. Use it for: internal 1:1 or small-team sync where the personal room is fine; back-to-back parallel meetings (`--conference zoom-pool`); explicit Google Meet preference (`--conference meet`); in-person/holds (`--conference none`).
 
-**Use the browser path only when the API path can't satisfy the requirement.** Triggers: external attendees (customers, candidates, vendors) where the personal room reads informal; user explicitly says "use the real Zoom" / "trigger the add-on" / "real Zoom dispatch"; audit/compliance need for a fresh unique Zoom meeting per event.
+**Use the hybrid path only when the API path can't satisfy the requirement.** Triggers: external attendees (customers, candidates, vendors) where the personal room reads informal; user explicitly says "use the real Zoom" / "trigger the add-on" / "real Zoom dispatch"; audit/compliance need for a fresh unique Zoom meeting per event.
 
 When ambiguous, ask once. Otherwise, default to API path.
 
@@ -215,58 +215,59 @@ If `conference_status` in the response flags an issue (missing join URL when one
 
 The first run after upgrading from a read-only `freebusy.py` will pop a browser for the broader write scope (the auth path's scope-mismatch detector handles it). User clicks through once; new token caches separately at `~/.config/ai-seal-tools/credentials/google_calendar_write_token.json`.
 
-### Browser path (Plan B — real Zoom add-on)
+### Hybrid path (Plan B — API create + browser Zoom attach)
 
-Drives the Calendar UI via Playwright MCP, clicking the Zoom Workspace add-on the same way a user would manually. The add-on's `createConferenceData` callback fires and Google attaches the resulting Zoom URL — identical to opening Calendar and clicking the button yourself, just automated.
+Two API calls bracket a 3-click Playwright sub-step. The API does all the boring stuff (title, times, attendees) — Playwright is only responsible for the one operation the public API can't do: triggering the Zoom Workspace add-on. If Playwright fails halfway, the event already exists on the user's calendar with no conferencing; recovery is a manual click in the user's own browser tab rather than a debug session.
 
-Pre-requisite: the Playwright Chromium profile already has a logged-in Calendar session. If not, step 1 will land at `accounts.google.com`; stop, ask the user to sign in manually in that browser context, retry.
+Follows the snapshot-driven / vision-fallback discipline in `prompts/browsing.md`.
 
-Follows the snapshot-driven / vision-fallback discipline in `prompts/browsing.md`. Re-snapshot after every state-changing action; the Calendar editor's labels and refs rotate.
+1. **Create the bare event via the API.** Use `create_event.py` exactly like the API path above, but pass `--conference none`. Capture the `event_id` from the JSON response — every subsequent step needs it.
+   ```bash
+   uv run --script "$(dirname "$0")/create_event.py" \
+     --start <iso> --end <iso> \
+     --summary "<title>" --attendees <emails> \
+     --conference none
+   ```
+   If the user has stipulated "don't send invites yet" or this is a self-only hold, the create still succeeds; Playwright will only fire if you decide to proceed.
 
-1. `browser_navigate("https://calendar.google.com")`. Confirm you land on the grid (not `accounts.google.com`). If signed out, stop and report — do not type credentials.
+2. **Open the event editor in Playwright** by navigating to `https://calendar.google.com/calendar/u/0/r/eventedit/<eid>`, where `<eid>` is the base64-encoded `event_id + " " + calendar_email` — the htmlLink returned by `create_event.py` already contains the correct `?eid=<base64>` parameter. Extract it with `book_browser_helpers.extract_eid_from_url`.
 
-2. Press `c` to open quick-create, then click **More options** to enter the full editor. (The full editor is more reliable to drive than the popover.)
+   - If you land on the calendar grid + a popover instead of the full editor, the URL form has changed; fall back to `browser_navigate("https://calendar.google.com")`, snapshot, click the event tile, then "Open detailed view" / "Edit".
+   - If `browser_navigate` returns `Target page, context or browser has been closed`, that's the **one expected error after the sign-in helper ran** (see sign-in flow below). The MCP discarded its stale browser handle on the failure and will launch a fresh Chrome on retry. Call `browser_navigate` once more with the same URL — second call succeeds against the now-signed-in profile.
+   - If you land on a sign-in page, `accounts.google.com`, or the `workspace.google.com/.../calendar/` marketing landing → the persistent profile has no valid Google session. **The MCP runs headless** (no visible window), so SSO can't happen inside it. Tell the user:
+     > "Your Google session for the Playwright profile has expired. Run `playwright-sign-in` in a terminal — that'll open a headed Chrome with our profile, you complete SSO + 2FA, close the window. Then tell me 'signed in' and I'll retry the booking. No need to restart Claude Code."
 
-3. Set the title: focus the title input, type the summary. Same specificity guidance as the API path.
+     Wait for the user's confirmation. When they say signed in, retry from step 2 (expect the one stale-handle error described above, then success).
+     - Do NOT type credentials yourself; do NOT call `browser_navigate` to drive the sign-in — the headless Chrome can't render the SSO 2FA flow.
+     - With Confluent's Workspace session policy, this is a one-shot every several hours/days, not per-booking.
+     - This flow is enabled by the npx-mcp-shim PATH interception (see `README.md` → Playwright MCP persistent profile). No IT allowlist change needed; the `.mcp.json` command still literal-matches the existing MDM-approved Playwright MCP entry.
 
-4. Set start/end via the date/time fields. Tab through `start date → start time → end date → end time`; time fields accept typed values like "1:30 PM". Re-snapshot after each field to confirm the value stuck (Calendar silently rejects malformed inputs).
+3. **Click the conferencing dropdown.** Find the "Add video conferencing" button (label rotates: "Add Google Meet video conferencing" if Meet is default). Click it; a `Conferencing solutions` menu opens.
 
-5. Add each guest in the **Add guests** field. Type the email, wait for the directory autocomplete entry, press **Enter** to commit. Flag any guest where autocomplete returned no match — the email is still added, but the no-match hint usually means a typo.
+4. **Click "Zoom Meeting"** in the menu. `browser_wait_for(text="Join Zoom Meeting", time=8)` for the add-on dispatch to complete.
 
-6. **Trigger the Zoom add-on:**
-   - Find the conferencing button — label is "Add Google Meet video conferencing" if Meet is the default, "Add video conferencing" otherwise.
-   - It's a **split button**: clicking the main face adds Meet immediately. Click the **dropdown arrow** to the right instead.
-   - Select **Zoom Meeting** from the dropdown.
-   - Wait 1–3 seconds for the add-on dispatch. A "Joining info" section with a Zoom URL appears once it completes.
-   - If "Zoom Meeting" isn't in the dropdown, the add-on isn't installed for this account — stop, fall back to API path with `--conference zoom`.
+   - If "Zoom Meeting" isn't in the menu, the add-on isn't installed for this account. Stop, tell the user, leave the event in place (they can manually add Zoom themselves or accept the no-conf event).
 
-7. Optionally fill the description.
+5. **Click Save** (top right of the editor). If there are attendees, a "Would you like to send update emails to existing Google Calendar guests?" dialog appears — click **Don't send**. The initial `create_event.py` invite has already gone out via `sendUpdates="all"`, and the Zoom URL is now on the server-side event (attendees see it when they click through from their existing invite). A second purely-Zoom-link update email is noise. See memory `skip-zoom-update-email`. Exception: only click Send if the user has explicitly asked you to re-notify attendees.
 
-8. Click **Save** (top right).
+6. **Re-query the event via the API** to capture the attached conferenceData:
+   ```bash
+   uv run --script "$(dirname "$0")/get_event.py" <event_id> --requested-conference zoom
+   ```
+   The output shape matches `create_event.py`'s response: `event_id`, `html_link`, `join_url`, `conference_solution`, `conference_status`, etc.
 
-9. Handle the "Send invitation emails?" dialog: **Send** (default) or **Don't send** (only when the meeting is explicitly self-only). Same consent rules as the API path.
-
-10. After save, extract: the event link (Calendar URLs include `?eid=<base64>`) and the Zoom join URL from the event's "Joining info" panel (snapshot, parse).
-
-11. Echo the event link + Zoom URL to the user. `browser_close()` unless the user is likely to inspect the event next.
+7. **Echo the result** to the user. If `conference_status` shows "no conference entry points attached" the Playwright click silently failed — tell the user the event exists but conferencing didn't attach; they can fix it in their own Calendar tab.
 
 **Failure modes specific to this path:**
-- **Signed out** → redirect to `accounts.google.com`. Stop, report, do not type credentials.
-- **No "Zoom Meeting" option in the dropdown** → add-on not installed for this account. Fall back to API path.
-- **Add-on dispatch hangs >15s** → screenshot, report. The dispatch reaches Zoom's Apps Script deployment via Google's internal RPC; transient outages happen.
-- **Save fails with overlap warning** → conflict probe in `freebusy.py` may have had stale data; re-verify and pick a new slot.
-- **Mid-flow sign-in challenge** → session cookies rotated (the `__Secure-1PSIDTS` pair rotates every few hours). Abort, ask the user to refresh the Calendar session in the Playwright profile, retry.
+- **Step 2 redirects to sign-in** → drive interactive sign-in (sub-bullets above), then retry.
+- **Step 4: "Zoom Meeting" missing from menu** → add-on not installed. Event already exists; surface and leave alone.
+- **Step 4: dispatch hangs >15s** → screenshot, report. The Zoom Apps Script deployment may be transiently slow.
+- **Step 5: Save fails with overlap warning** → conflict probe in `freebusy.py` may have had stale data; the event was never created, so re-run from step 1 with a new slot.
+- **Step 6: get_event returns no conferenceData** → Playwright click landed but Save didn't commit it (rare; usually a network blip). The event exists titled/timed correctly; tell the user and let them retry the attach manually.
 
-**Why this lives separately:** Google's public Calendar API restricts `createRequest.conferenceSolutionKey.type` to `hangoutsMeet` only — no path to invoke a Workspace add-on's conference dispatch from the API. The internal RPC the UI uses requires session cookies + SAPISIDHASH auth that are impractical to forge from a script (and unmaintainable across Google's wire-format rotations). Driving the UI is the stable way to reach that dispatch until Google exposes it publicly.
+**Why this lives separately:** Google's public Calendar API restricts `createRequest.conferenceSolutionKey.type` to `hangoutsMeet` only — no path to invoke a Workspace add-on's conference dispatch from the API. The internal RPC the UI uses requires session cookies + SAPISIDHASH auth that are impractical to forge from a script (and unmaintainable across Google's wire-format rotations). Driving the UI for *just* the add-on click is the stable way to reach that dispatch until Google exposes it publicly.
 
-**Helpers:** the deterministic pieces of this flow (time/date string formatting for the picker inputs, parsing `?eid=` from the post-save URL, extracting the Zoom URL from a snapshot blob, shaping the response) live in `book_browser_helpers.py` so they're unit-testable independently of the MCP recipe. Import inline when you need them, e.g.:
-```bash
-uv run python -c "import sys; sys.path.insert(0, '$(dirname \"$0\")'); \
-  from book_browser_helpers import format_time_picker; \
-  import datetime as dt; \
-  print(format_time_picker(dt.time(13, 30)))"
-# → "1:30 PM"
-```
+**Helpers:** `book_browser_helpers.py` carries the deterministic pieces (parsing `?eid=` from a Calendar URL, decoding the eid base64, extracting a Zoom URL from a snapshot, shaping a response when you skip the get_event re-query). Unit-tested in `tests/test_book_browser_helpers.py`.
 
 ## Logging outcomes after an ask
 

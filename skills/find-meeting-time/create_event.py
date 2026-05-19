@@ -17,11 +17,12 @@ Zoom-room pool, or a Google Meet link.
 NOTE: this script does NOT trigger the Zoom Workspace add-on's real
 conference-creation dispatch. Google's public Calendar API only accepts
 `hangoutsMeet` in `createRequest.conferenceSolutionKey.type`, so add-on
-dispatch is unavailable here. The Calendar UI invokes it via a private
-RPC that requires browser-session auth. When a real Zoom-add-on
-meeting is required (external attendees, audit/compliance needs for
-unique URLs), use the Playwright-driven "Browser path" documented in
-SKILL.md instead of this script.
+dispatch is unavailable here. When a real Zoom-add-on meeting is
+required (external attendees, audit/compliance needs for unique URLs),
+use the hybrid path documented in SKILL.md: call this script with
+`--conference none` to create the bare event, drive Playwright to
+click the Zoom Meeting add-on in the editor, then re-query with
+`get_event.py` to confirm what attached.
 
 Scope: requires `https://www.googleapis.com/auth/calendar.events` (write).
 This is a SUPERSET of freebusy.py's `calendar.events.readonly` scope, so
@@ -153,6 +154,7 @@ def build_event_body(
     description: str = "",
     conference: str = "zoom",
     zoom_url: str | None = None,
+    organizer_email: str | None = None,
 ) -> dict:
     """Pure function: construct the `events.insert` request body.
 
@@ -165,12 +167,28 @@ def build_event_body(
       - 'meet': createRequest with conferenceSolutionKey.type=hangoutsMeet
         — Google mints a Meet link server-side.
       - 'none': bare event, no conferenceData.
+
+    `organizer_email`: when set, the matching attendee entry gets
+    `responseStatus: "accepted"` so the organizer's calendar shows
+    the event as RSVP-confirmed rather than needsAction. Matched
+    case-insensitively. See memory `booking-marks-organizer-accepted`.
     """
+    organizer_lower = (organizer_email or "").strip().lower() or None
+    attendee_objs: list[dict] = []
+    for e in attendees:
+        email = e.strip().lower()
+        if not email:
+            continue
+        att: dict = {"email": email}
+        if organizer_lower and email == organizer_lower:
+            att["responseStatus"] = "accepted"
+        attendee_objs.append(att)
+
     body: dict = {
         "summary": summary,
         "start": {"dateTime": start.isoformat()},
         "end": {"dateTime": end.isoformat()},
-        "attendees": [{"email": e.strip().lower()} for e in attendees if e.strip()],
+        "attendees": attendee_objs,
     }
     if description:
         body["description"] = description
@@ -197,6 +215,41 @@ def build_event_body(
             "conferenceId": str(uuid.uuid4()),
         }
     return body
+
+
+def _ensure_organizer_accepted(svc, event: dict) -> dict:
+    """If the organizer is listed among `attendees` but their
+    responseStatus isn't 'accepted', patch the event to fix it.
+    Returns the (possibly-updated) event dict.
+
+    Uses sendUpdates='none' on the patch so attendees don't get a
+    notification about the organizer's own RSVP change.
+
+    Idempotent: a no-op when the organizer is already accepted or not
+    in the attendees list (e.g., self-only event with no `--attendees`).
+    See memory `booking-marks-organizer-accepted` for why.
+    """
+    organizer_email = ((event.get("organizer") or {}).get("email") or "").lower()
+    if not organizer_email:
+        return event
+    attendees = list(event.get("attendees") or [])
+    changed = False
+    for a in attendees:
+        if a.get("email", "").lower() == organizer_email and a.get("responseStatus") != "accepted":
+            a["responseStatus"] = "accepted"
+            changed = True
+    if not changed:
+        return event
+    try:
+        return svc.events().patch(
+            calendarId="primary",
+            eventId=event["id"],
+            body={"attendees": attendees},
+            sendUpdates="none",
+        ).execute()
+    except HttpError as e:
+        print(f"[create_event] warning: failed to mark organizer accepted (HTTP {e.resp.status}); event still created", file=sys.stderr)
+        return event
 
 
 def summarize_response(event: dict, requested_conference: str) -> dict:
@@ -246,6 +299,12 @@ def main() -> None:
     p.add_argument("--conference", choices=sorted(VALID_CONFERENCE_TYPES), help="Override config.yaml default")
     p.add_argument("--zoom-url", help="Ad-hoc Zoom URL to attach; overrides personal/pool resolution")
     p.add_argument("--impersonate", help="Service-account DWD subject (rare)")
+    p.add_argument(
+        "--organizer-email",
+        help="Override the auto-detected organizer email. Used for service-"
+             "account / DWD flows where the authenticated identity differs "
+             "from the intended organizer. Default: the primary calendar's id.",
+    )
     p.add_argument("--config", type=Path, default=CONFIG_FILE)
     p.add_argument("--dry-run", action="store_true", help="Print the request body and exit without calling the API")
     args = p.parse_args()
@@ -271,6 +330,7 @@ def main() -> None:
     body = build_event_body(
         start, end, args.summary, attendees,
         description=args.description, conference=conference, zoom_url=zoom_url,
+        organizer_email=args.organizer_email,
     )
 
     if args.dry_run:
@@ -288,6 +348,14 @@ def main() -> None:
         ).execute()
     except HttpError as e:
         sys.exit(f"events.insert failed: HTTP {e.resp.status}: {e}")
+
+    # Post-insert: mark the organizer's own attendee entry as accepted
+    # if it isn't already. We use the actual organizer.email from the
+    # response (always populated by the API) — that avoids needing a
+    # broader scope to look up the authenticated user separately. Patch
+    # with sendUpdates="none" so attendees aren't pinged about our own
+    # RSVP state change.
+    event = _ensure_organizer_accepted(svc, event)
 
     json.dump(summarize_response(event, requested_conference=conference), sys.stdout, indent=2)
     sys.stdout.write("\n")
