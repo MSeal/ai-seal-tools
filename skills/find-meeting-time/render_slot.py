@@ -55,6 +55,9 @@ ROW_LABEL_MIN_WIDTH = 12   # never narrower than this, keeps headers readable
 ROW_LABEL_MAX_WIDTH = 26   # truncate beyond this, keeps overall width bounded
 DEFAULT_TICK_MINUTES = 15
 DEFAULT_MAX_VISIBLE_ATTENDEES = 6
+DEFAULT_CONTEXT_TICK_MINUTES = 30   # coarser ticks for the wider ±2h context band
+DEFAULT_CONTEXT_HOURS_BEFORE = 2.0
+DEFAULT_CONTEXT_HOURS_AFTER = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +275,149 @@ def render_timeline(
     return header + "\n" + "\n".join(rows)
 
 
+def render_context_timeline(
+    slot_start: dt.datetime,
+    slot_end: dt.datetime,
+    requester_email: str | None,
+    context_events: list[dict],
+    *,
+    names: dict[str, str] | None = None,
+    hours_before: float = DEFAULT_CONTEXT_HOURS_BEFORE,
+    hours_after: float = DEFAULT_CONTEXT_HOURS_AFTER,
+    tick_minutes: int = DEFAULT_CONTEXT_TICK_MINUTES,
+) -> str:
+    """Render the requester-only context band: a wider timeline padded
+    ±N hours around the slot, plus a marker line `└── proposed ──┘`
+    underneath whose endpoints align with the slot's columns.
+
+    Returns a multi-line string (no fenced code block — caller wraps).
+    Skips entirely when context_events is empty AND the entire ±N
+    range happens to be free (still useful to render for the marker,
+    but optional — caller decides)."""
+    window_start = slot_start - dt.timedelta(hours=hours_before)
+    window_end = slot_end + dt.timedelta(hours=hours_after)
+    boundaries = compute_boundaries(window_start, window_end, tick_minutes)
+    n_intervals = len(boundaries) - 1
+
+    # Header time labels.
+    label_width = _compute_row_label_width(
+        [requester_email or ""], requester_email, names,
+    ) if requester_email else ROW_LABEL_MIN_WIDTH
+    pad = " " * (label_width + COL_GAP)
+    header_parts = [pad]
+    for b in boundaries:
+        header_parts.append(short_time(b))
+        header_parts.append(" " * COL_GAP)
+    header = "".join(header_parts).rstrip()
+
+    # Requester's row.
+    row_parts = [
+        row_label(requester_email or "", requester_email, names=names, width=label_width)
+        + (" " * COL_GAP)
+    ]
+    for i in range(n_intervals):
+        g = tick_glyph(boundaries[i], boundaries[i + 1], context_events) * TICK_WIDTH
+        row_parts.append(g)
+        row_parts.append(" " * COL_GAP)
+    row = "".join(row_parts).rstrip()
+
+    # Marker line below: `└── proposed ──┘` whose left edge aligns with
+    # the first interval overlapping the slot, right edge with the last.
+    marker = _slot_marker_line(boundaries, slot_start, slot_end, label_width)
+    return "\n".join([header, row, marker])
+
+
+def _slot_marker_line(
+    boundaries: list[dt.datetime],
+    slot_start: dt.datetime,
+    slot_end: dt.datetime,
+    label_width: int,
+) -> str:
+    """Build the `└── proposed ──┘` marker positioned under the
+    requester's row. The marker spans columns whose intervals overlap
+    [slot_start, slot_end). For a 45-min slot on 30-min ticks, the
+    marker spans 2 intervals (each 30 min — covering the slot's 45
+    min with some overshoot). The label 'proposed' is centered
+    between the corners; for short marker spans (1 col) we just show
+    `↑ proposed` instead of trying to fit corners."""
+    n_intervals = len(boundaries) - 1
+    overlapping_cols: list[int] = []
+    for i in range(n_intervals):
+        if boundaries[i] < slot_end and boundaries[i + 1] > slot_start:
+            overlapping_cols.append(i)
+    if not overlapping_cols:
+        # Slot is fully outside the context window — degenerate case;
+        # don't render a marker.
+        return ""
+
+    first = overlapping_cols[0]
+    last = overlapping_cols[-1]
+    col_width = TICK_WIDTH + COL_GAP
+
+    # Position of each column's leading edge (where labels/glyphs start).
+    label_col_offset = label_width + COL_GAP
+
+    # Marker line: spaces up to first column, then a corner-line-corner
+    # spanning to last column.
+    marker_start = label_col_offset + first * col_width
+    marker_end = label_col_offset + last * col_width + TICK_WIDTH
+    width_between = marker_end - marker_start
+
+    if width_between <= TICK_WIDTH:
+        # Single-column slot; use a caret marker.
+        return " " * marker_start + "↑ proposed"
+
+    inner = width_between - 2  # 2 corner chars
+    label_text = "proposed"
+    if inner >= len(label_text):
+        pad = inner - len(label_text)
+        bar = "─" * (pad // 2) + label_text + "─" * (pad - pad // 2)
+    else:
+        bar = "─" * inner
+    return " " * marker_start + "└" + bar + "┘"
+
+
+def adjacent_events_lines(
+    slot_start: dt.datetime,
+    slot_end: dt.datetime,
+    context_events: list[dict],
+    *,
+    names: dict[str, str] | None = None,
+) -> list[str]:
+    """Build the bullet list of named events that fall inside the
+    context window — ordered by start time. Each line ends with a
+    movability hint so the user can scan for friction.
+
+    Returns [] when there are no events to enumerate (which the
+    caller renders as a single 'otherwise clear' line in that case)."""
+    items: list[tuple[dt.datetime, dt.datetime, str]] = []
+    for c in context_events:
+        cs = _parse_iso(c["conflict_start"])
+        ce = _parse_iso(c["conflict_end"])
+        if ce <= slot_start:
+            rel = "before"
+        elif cs >= slot_end:
+            rel = "after"
+        else:
+            rel = "overlapping"
+        summary = c.get("summary") or "(no title)"
+        m = c.get("movability", 5)
+        if not c.get("visible", True):
+            tag = "opaque"
+        elif m >= 7:
+            tag = f"movability {m}"
+        elif m >= 4:
+            tag = f"moderate; {m}"
+        else:
+            tag = f"⚠ fixed; {m}"
+        items.append((
+            cs, ce,
+            f"{cs.strftime('%-I:%M %p')}–{ce.strftime('%-I:%M %p')}  \"{summary}\" ({tag}, {rel})",
+        ))
+    items.sort(key=lambda t: t[0])
+    return [f"- {line}" for _, _, line in items]
+
+
 def slot_summary_line(
     slot: dict,
     by_attendee: dict[str, list[dict]],
@@ -315,6 +461,9 @@ def format_slot_card(
     tick_minutes: int = DEFAULT_TICK_MINUTES,
     max_visible_attendees: int = DEFAULT_MAX_VISIBLE_ATTENDEES,
     names: dict[str, str] | None = None,
+    context_hours_before: float = DEFAULT_CONTEXT_HOURS_BEFORE,
+    context_hours_after: float = DEFAULT_CONTEXT_HOURS_AFTER,
+    context_tick_minutes: int = DEFAULT_CONTEXT_TICK_MINUTES,
 ) -> str:
     """Render a single slot as a markdown block: header line + fenced
     code block with the timeline. Returns the full multi-line string."""
@@ -379,7 +528,36 @@ def format_slot_card(
         start, end, attendees_conflicts, requester_email,
         names=names, tick_minutes=tick_minutes,
     )
-    return header + "\n```\n" + timeline + "\n```"
+    card = header + "\n```\n" + timeline + "\n```"
+
+    # Optional ±N-hour context band, requester-only. Only rendered when
+    # the slot dict carries `context_events` (the SKILL.md flow fetches
+    # these via events_around.py for each top slot). Skips silently if
+    # we don't know who the requester is.
+    if requester_email and "context_events" in slot:
+        ctx_events = slot.get("context_events") or []
+        wnd_before = float(slot.get("context_hours_before", context_hours_before))
+        wnd_after = float(slot.get("context_hours_after", context_hours_after))
+        ctx_band = render_context_timeline(
+            start, end, requester_email, ctx_events,
+            names=names,
+            hours_before=wnd_before,
+            hours_after=wnd_after,
+            tick_minutes=context_tick_minutes,
+        )
+        window_start = start - dt.timedelta(hours=wnd_before)
+        window_end = end + dt.timedelta(hours=wnd_after)
+        ctx_header = (
+            f"\n\n   Your day ({short_time(window_start).strip()}–"
+            f"{short_time(window_end).strip()}):\n```\n{ctx_band}\n```"
+        )
+        adj = adjacent_events_lines(start, end, ctx_events, names=names)
+        if adj:
+            ctx_header += "\n   Adjacent:\n   " + "\n   ".join(adj)
+        else:
+            ctx_header += "\n   _(otherwise clear in this window)_"
+        card += ctx_header
+    return card
 
 
 def parse_names_arg(raw: str) -> dict[str, str]:

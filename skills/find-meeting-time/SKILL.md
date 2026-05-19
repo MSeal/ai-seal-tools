@@ -337,15 +337,39 @@ These are heuristics. The user's judgment overrides — if Alice's "1:1" is with
 **Always render each top slot via `render_slot.py`** — it produces a consistent header + ASCII timeline that shows the layout of conflicts across all attendees. Don't hand-format slot cards; the renderer's contract is what tests lock in.
 
 ```bash
-# Save freebusy output to a temp file, then render the top N slots:
+# 1. Save freebusy output to a temp file.
 TMP=$(mktemp); ...freebusy.py ... > $TMP
+
+# 2. For each top slot, fetch the requester's ±2h context events and
+#    splice them into the slot dict as `context_events`. The renderer
+#    automatically adds a "Your day" band + slot marker + adjacent
+#    events list when this field is present.
+TMP_AUG=$(mktemp)
+uv run python -c "
+import json, sys, subprocess
+data = json.load(open('$TMP'))
+for slot in data.get('ranked_slots', [])[:5]:
+    out = subprocess.check_output([
+        'uv', 'run', '--script',
+        '$(dirname \"$0\")/events_around.py',
+        '--slot-start', slot['start'],
+        '--slot-end',   slot['end'],
+        '--email',      'mseal@confluent.io',
+    ], text=True)
+    slot['context_events'] = json.loads(out)['context_events']
+json.dump(data, open('$TMP_AUG', 'w'))
+"
+
+# 3. Render the augmented slots.
 uv run --script "$(dirname "$0")/render_slot.py" \
-  --from "$TMP" \
+  --from "$TMP_AUG" \
   --attendees mseal@confluent.io,alice@example.com \
   --requester mseal@confluent.io \
   --names "mseal@confluent.io=Matthew Seal,alice@example.com=Alice Lee" \
   --top 5
 ```
+
+The context band defaults to ±2 hours with 30-min ticks. The slot itself is marked with `└── proposed ──┘` underneath the row, so back-to-back vs. clear-pocket is visible at a glance.
 
 **Always pass `--names`** with the full display name for every attendee — using `firstname.lastname` or the email handle as the row label trades scannability for ~no work saved.
 

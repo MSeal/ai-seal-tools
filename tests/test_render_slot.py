@@ -626,3 +626,177 @@ def test_slot_card_header_includes_date_and_duration():
     )
     assert "Fri, May 22" in card
     assert "45 min" in card
+
+
+# ---------------------------------------------------------------------------
+# render_context_timeline + slot marker + adjacent events
+# ---------------------------------------------------------------------------
+
+
+def test_context_timeline_renders_when_no_conflicts():
+    """No context events in the ±N window → all dashes in the
+    requester's row, plus the slot marker pointing at the right
+    columns."""
+    out = rs.render_context_timeline(
+        _dt("2026-05-22T14:30:00-07:00"),
+        _dt("2026-05-22T15:15:00-07:00"),
+        "mseal@confluent.io",
+        context_events=[],
+        names={"mseal@confluent.io": "Matthew Seal"},
+        hours_before=2.0,
+        hours_after=2.0,
+        tick_minutes=30,
+    )
+    lines = out.splitlines()
+    # Header has window edge labels.
+    assert "12:30" in lines[0]  # 2h before 14:30
+    assert "5:15" in lines[0]  # 2h after 15:15
+    # Body row has dashes only.
+    assert rs.GLYPH_FREE * rs.TICK_WIDTH in lines[1]
+    # Marker line below has the └── proposed ──┘ block.
+    assert "└" in lines[2] and "┘" in lines[2]
+    assert "proposed" in lines[2]
+
+
+def test_context_timeline_renders_named_conflict():
+    """A movability-5 conflict that overlaps the window shades the
+    matching tick(s) with the moderate glyph."""
+    out = rs.render_context_timeline(
+        _dt("2026-05-22T14:30:00-07:00"),
+        _dt("2026-05-22T15:15:00-07:00"),
+        "mseal@confluent.io",
+        context_events=[_conflict(
+            start="2026-05-22T13:00:00-07:00",
+            end="2026-05-22T13:30:00-07:00",
+            summary="Alex 1:1",
+            movability=5,
+        )],
+        names={"mseal@confluent.io": "Matthew Seal"},
+        hours_before=2.0,
+        hours_after=2.0,
+        tick_minutes=30,
+    )
+    assert rs.GLYPH_MODERATE * rs.TICK_WIDTH in out
+
+
+def test_slot_marker_line_aligns_with_slot_columns():
+    """The marker's `└` should be at the same column position as the
+    first slot-overlapping tick's leading edge. For a 45-min slot at
+    14:30 in a context starting at 12:30 with 30-min ticks, the slot
+    starts at column index 4 (12:30, 13:00, 13:30, 14:00, [14:30...])."""
+    boundaries = rs.compute_boundaries(
+        _dt("2026-05-22T12:30:00-07:00"),
+        _dt("2026-05-22T17:15:00-07:00"),
+        tick_minutes=30,
+    )
+    marker = rs._slot_marker_line(
+        boundaries,
+        _dt("2026-05-22T14:30:00-07:00"),
+        _dt("2026-05-22T15:15:00-07:00"),
+        label_width=18,
+    )
+    label_col_offset = 18 + rs.COL_GAP  # 20
+    col_width = rs.TICK_WIDTH + rs.COL_GAP  # 7
+    assert marker.index("└") == label_col_offset + 4 * col_width
+
+
+def test_adjacent_events_lines_sorted_by_start():
+    """Adjacent list ordered by start time; before/overlapping/after
+    annotation visible."""
+    lines = rs.adjacent_events_lines(
+        _dt("2026-05-22T14:30:00-07:00"),
+        _dt("2026-05-22T15:15:00-07:00"),
+        context_events=[
+            _conflict(start="2026-05-22T15:45:00-07:00",
+                      end="2026-05-22T16:15:00-07:00",
+                      summary="After", movability=5),
+            _conflict(start="2026-05-22T13:00:00-07:00",
+                      end="2026-05-22T13:30:00-07:00",
+                      summary="Before", movability=8),
+        ],
+    )
+    assert lines[0].endswith('before)')
+    assert "Before" in lines[0]
+    assert lines[1].endswith('after)')
+    assert "After" in lines[1]
+
+
+def test_adjacent_events_lines_flags_fixed_with_warning():
+    lines = rs.adjacent_events_lines(
+        _dt("2026-05-22T14:30:00-07:00"),
+        _dt("2026-05-22T15:15:00-07:00"),
+        context_events=[_conflict(
+            start="2026-05-22T16:00:00-07:00",
+            end="2026-05-22T16:30:00-07:00",
+            summary="Customer call",
+            movability=2,
+        )],
+    )
+    assert "⚠ fixed; 2" in lines[0]
+
+
+def test_adjacent_events_lines_empty_for_no_events():
+    assert rs.adjacent_events_lines(
+        _dt("2026-05-22T14:30:00-07:00"),
+        _dt("2026-05-22T15:15:00-07:00"),
+        context_events=[],
+    ) == []
+
+
+def test_slot_card_renders_context_band_when_context_events_present():
+    """End-to-end: a slot dict with `context_events` produces a card
+    with both the group timeline AND the context timeline + marker +
+    adjacent list."""
+    card = rs.format_slot_card(
+        {
+            "start": "2026-05-22T14:30:00-07:00",
+            "end":   "2026-05-22T15:15:00-07:00",
+            "score": 100,
+            "conflicts": [],
+            "context_events": [_conflict(
+                start="2026-05-22T13:00:00-07:00",
+                end="2026-05-22T13:30:00-07:00",
+                summary="Alex 1:1",
+                movability=8,
+            )],
+        },
+        attendees=["mseal@confluent.io"],
+        requester_email="mseal@confluent.io",
+        names={"mseal@confluent.io": "Matthew Seal"},
+    )
+    assert "Your day" in card
+    assert "└" in card and "proposed" in card and "┘" in card
+    assert "Adjacent:" in card
+    assert '"Alex 1:1"' in card
+    assert "before" in card  # 1:1 ends 1h before the slot
+
+
+def test_slot_card_no_context_band_when_no_context_events_key():
+    """If the slot dict has no `context_events` field, the card skips
+    the context band entirely (backwards-compatible with the older
+    freebusy.py output)."""
+    card = rs.format_slot_card(
+        {"start": "2026-05-22T14:30:00-07:00",
+         "end": "2026-05-22T15:15:00-07:00",
+         "score": 100, "conflicts": []},
+        attendees=["mseal@confluent.io"],
+        requester_email="mseal@confluent.io",
+        names={"mseal@confluent.io": "Matthew Seal"},
+    )
+    assert "Your day" not in card
+
+
+def test_slot_card_renders_context_with_empty_events_list():
+    """`context_events: []` (we DID check, you're clear) still renders
+    the band so the user can see the ±2h is verified."""
+    card = rs.format_slot_card(
+        {"start": "2026-05-22T14:30:00-07:00",
+         "end": "2026-05-22T15:15:00-07:00",
+         "score": 100, "conflicts": [],
+         "context_events": []},
+        attendees=["mseal@confluent.io"],
+        requester_email="mseal@confluent.io",
+        names={"mseal@confluent.io": "Matthew Seal"},
+    )
+    assert "Your day" in card
+    assert "otherwise clear" in card
