@@ -13,6 +13,14 @@ Personal AI exploration repo. The goal is to build utilities, skills, and agents
 
 Don't create a git commit without explicit permission. Permission is scoped to a single commit by default — even after a "yes, commit" approval, ask again before the next commit unless the user indicates a wider scope (e.g., "commit freely in this session", "commit each time you reach a stable point", or a similar broadening). Soft-resetting a commit doesn't grant permission to re-commit — wait for the user.
 
+## Identity info in checked-in files
+
+This repo is public-domain. The author's own identity is fine in committed content — `mseal@confluent.io`, `Matthew Seal`, `Confluent` company references are all acceptable (the LICENSE already names the author). **Never put any other person's identity info into a tracked file** — no coworker real names, emails, Slack handles, calendar metadata, captured `curl` payloads, or anything that could identify a real third party.
+
+Default placeholders for stand-in attendees in tests, docs, and examples: `alice@example.com`, `bob@example.com`, `carol@example.com`, `dave@example.com`, `eve@example.com`, `frank@example.com` (with `Alice Example`, `Bob Example`, etc. as display names). The `@example.com` domain is RFC-reserved for documentation, so accidental real-mail won't happen.
+
+When a real colleague's data appears during live testing (freebusy output, captured curls, snapshot fragments), scrub before staging. Memory files (`~/.claude/projects/...`) and `scratch/` are gitignored — those are the right home for cache data that must contain real names (e.g., `slack_refs.yaml`, `seniority.yaml`). Before any `git add`, verify the staged set doesn't leak third-party identity.
+
 ## Scoring magnitudes
 
 For any skill or utility with a scoring/ranking engine (today: `skills/find-meeting-time/freebusy.py`), every penalty or bonus magnitude that affects the output score **must** be declared in a checked-in `score_weights.yaml` (with an optional gitignored `score_weights.local.yaml` override) — never hardcoded inline. Pattern set by `skills/find-meeting-time/score_weights.yaml` + `ScoreWeights` dataclass.
