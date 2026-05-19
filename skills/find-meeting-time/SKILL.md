@@ -347,7 +347,36 @@ uv run --script "$(dirname "$0")/render_slot.py" \
   --top 5
 ```
 
-**Always pass `--names`** with the full display name for every attendee — using `firstname.lastname` or the email handle as the row label trades scannability for ~no work saved. By the time you call the renderer you've already resolved each attendee to an email (via Glean lookups, the Slack-ref cache, or directly from the user). Pass the same resolution results through as the names mapping: `"email1=First Last,email2=First Last,…"`. The renderer falls back to email local-part for unmapped entries — no display crash, just less readable.
+**Always pass `--names`** with the full display name for every attendee — using `firstname.lastname` or the email handle as the row label trades scannability for ~no work saved.
+
+**Resolution order for names:**
+
+1. **`people.yaml` cache** (`~/.config/ai-seal-tools/find-meeting-time/people.yaml`). Read it first and pull `people.<email>.name` for each attendee. This is the bulk of the work — the cache covers everyone the requester has met in the last ~30 days (and grows over time).
+   ```bash
+   uv run python -c "
+   import yaml; data = yaml.safe_load(open('$CACHE_PATH').read()) or {}
+   people = data.get('people', {})
+   for e in ATTENDEES:
+       name = people.get(e.lower(), {}).get('name')
+       if name: print(f'{e}={name}')
+   "
+   ```
+2. **Glean lookup** for any attendee not in the cache (or whose cache entry has `name: null`). Use `mcp__glean__chat` with a `What is X's Confluent email?`-style prompt, or `mcp__glean__search` with `app=people`. After resolving, persist via `record_person_name.py --source glean single --email <e> --name <n>` so the next call hits the cache.
+3. **Email local-part fallback** for anything still unresolved — the renderer does this automatically when a name is missing from the `--names` map.
+
+The cache file is gitignored and Drive-backed. Maintain it with:
+
+```bash
+# Top up after meetings happen (idempotent; safe to re-run):
+uv run --script scan_recent_attendees.py [--since-days 30 --max-attendees 5]
+
+# Fill in names that Calendar's displayName didn't surface, after a
+# Glean lookup. Single or bulk-from-stdin:
+record_person_name.py --source glean single --email <e> --name "<n>"
+echo '{"e1": "N1", "e2": "N2"}' | record_person_name.py --source glean bulk
+```
+
+Then pass the resolved mapping to the renderer: `"email1=First Last,email2=First Last,…"`. The renderer falls back to email local-part for any unmapped entries — no display crash, just less readable.
 
 The renderer outputs each slot as:
 

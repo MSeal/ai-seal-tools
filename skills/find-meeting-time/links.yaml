@@ -43,3 +43,9 @@
     - ~/.config/ai-seal-tools/find-meeting-time/slack_refs.yaml
     - config.local/find-meeting-time/slack_refs.yaml
   template_if_missing: templates/slack_refs.yaml
+
+- target: ~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/My Drive/ai-seal-tools/find-meeting-time/people.yaml
+  symlinks:
+    - ~/.config/ai-seal-tools/find-meeting-time/people.yaml
+    - config.local/find-meeting-time/people.yaml
+  template_if_missing: templates/people.yaml

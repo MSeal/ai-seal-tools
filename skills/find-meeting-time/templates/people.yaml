@@ -1,0 +1,24 @@
+# Email → display-name cache for find-meeting-time.
+#
+# Populated by `scan_recent_attendees.py` (which lists Calendar events,
+# filters to small meetings, and extracts attendee names) and by ad-hoc
+# Glean lookups Claude performs when resolving "find a time with <Name>"
+# requests. Consumed by Claude when building `render_slot.py --names`
+# so timelines show full names instead of email handles.
+#
+# Schema: a single top-level `people` mapping, keyed by lowercase email.
+#   people:
+#     alice@example.com:
+#       name: Alice Example
+#       last_seen: 2026-05-15      # ISO date of most recent event the
+#                                    # attendee appeared on (used to age
+#                                    # out stale entries when refreshing)
+#       sources: [calendar-scan]    # where the entry came from; useful
+#                                    # for debugging when name disagrees
+#                                    # with reality
+#
+# This file is gitignored — it'll naturally contain real coworker names
+# and emails. Do NOT stage it; if `git add` ever sees it, abort and check
+# .gitignore. The committed template (this file) has only the schema doc.
+
+people: {}
