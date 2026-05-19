@@ -15,7 +15,7 @@ The API path is what this doc gets you to.
 ## TL;DR — fresh machine, credentials already exist
 
 You already went through the "from scratch" setup on another machine and have
-the OAuth client JSON for project `mseal-devel`. To repeat on a new machine:
+the OAuth client JSON for project `you-devel`. To repeat on a new machine:
 
 ```bash
 # 1. Clone the repo and sync deps
@@ -26,7 +26,7 @@ UV_NO_CONFIG=1 uv sync
 UV_NO_CONFIG=1 uv run utils/install_skills.py
 
 # 3. Copy the OAuth client JSON over from the old machine (or re-download it
-#    from console.cloud.google.com → APIs & Services → Credentials → mseal-devel)
+#    from console.cloud.google.com → APIs & Services → Credentials → you-devel)
 mkdir -m 700 -p ~/.config/ai-seal-tools/credentials
 scp old-machine:~/.config/ai-seal-tools/credentials/google_oauth_client.json \
     ~/.config/ai-seal-tools/credentials/google_oauth_client.json
@@ -48,17 +48,17 @@ not, jump to [Troubleshooting](#troubleshooting).
 ## From scratch — first time ever
 
 Skip this section if a teammate or your past self has already set up
-`mseal-devel` (or equivalent personal GCP project) and you just need the OAuth
+`you-devel` (or equivalent personal GCP project) and you just need the OAuth
 client JSON. In that case use the [TL;DR](#tldr--fresh-machine-credentials-already-exist) above.
 
 ### Prerequisites
 
-- A Confluent Google account (`mseal@confluent.io`)
+- A Confluent Google account (`you@example.com`)
 - A GCP project you own or admin (a personal dev project is fine; need not
   involve IT for this path). If you don't have one: `console.cloud.google.com`
-  → top-bar project picker → New Project. Project ID like `mseal-devel`.
+  → top-bar project picker → New Project. Project ID like `you-devel`.
 - `gcloud` CLI installed and authed:
-  `gcloud auth login && gcloud config set project mseal-devel`
+  `gcloud auth login && gcloud config set project you-devel`
 - `uv` installed
 - This repo cloned and `uv sync`'d
 
@@ -67,7 +67,7 @@ client JSON. In that case use the [TL;DR](#tldr--fresh-machine-credentials-alrea
 #### 1. Enable the Calendar API on your project
 
 ```bash
-gcloud services enable calendar-json.googleapis.com --project=mseal-devel
+gcloud services enable calendar-json.googleapis.com --project=you-devel
 ```
 
 If gcloud complains about reauth, run `gcloud auth login` first.
@@ -103,7 +103,7 @@ client ID**
 Hit Create, then **Download JSON**. The file looks like:
 
 ```json
-{"installed":{"client_id":"...","project_id":"mseal-devel","client_secret":"GOCSPX-...","redirect_uris":["http://localhost"]}}
+{"installed":{"client_id":"...","project_id":"you-devel","client_secret":"GOCSPX-...","redirect_uris":["http://localhost"]}}
 ```
 
 (Yes the `client_secret` is in there. Per Google's docs, Desktop client
@@ -205,7 +205,7 @@ The skill reads two optional personal files. The real files live in
 without extra code. Two layers of symlinks point at the Drive target:
 
 ```
-~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/
+~/Library/CloudStorage/GoogleDrive-you@example.com/
    My Drive/ai-seal-tools/find-meeting-time/
      config.yaml        ← real file (synced by Drive Desktop)
      preferences.md     ← real file (synced by Drive Desktop)
@@ -228,7 +228,7 @@ Both files are created automatically the first time you run
 path get migrated to Drive on first run after this upgrade.
 
 **On a new machine:** install Google Drive Desktop, sign in as
-`mseal@confluent.io`, wait for the `ai-seal-tools/` folder to sync into
+`you@example.com`, wait for the `ai-seal-tools/` folder to sync into
 `~/Library/CloudStorage/...`, then run `uv run utils/install_skills.py`.
 The installer detects the synced files and creates the symlinks pointing
 at them; no manual file copy needed.
@@ -282,7 +282,7 @@ defaults:
 
 ```yaml
 # default_conference: zoom | zoom-pool | meet | none
-# zoom_personal_meeting_url: "https://confluent.zoom.us/my/mseal"
+# zoom_personal_meeting_url: "https://confluent.zoom.us/my/you"
 # zoom_fallback_rooms:
 #   - "https://confluent.zoom.us/j/1234567890?pwd=..."
 #   - "https://confluent.zoom.us/j/2345678901?pwd=..."
@@ -485,9 +485,9 @@ Each entry: symptom → diagnosis → fix.
   OAuth client.
 - **Fix**:
   ```bash
-  gcloud services enable calendar-json.googleapis.com --project=mseal-devel
+  gcloud services enable calendar-json.googleapis.com --project=you-devel
   ```
-  Wait ~30 seconds for propagation, then re-run. (Replace `mseal-devel` with
+  Wait ~30 seconds for propagation, then re-run. (Replace `you-devel` with
   the `project_id` in your `google_oauth_client.json` if different.)
 
 ### `Access blocked: <app name> has not completed the Google verification process`
@@ -589,7 +589,7 @@ To request from IT:
 >
 > - **Project**: an existing project I have access to, or a new sandbox.
 > - **API enabled on project**: `calendar-json.googleapis.com`
-> - **Service account**: name `mseal-calendar-finder`, purpose: read
+> - **Service account**: name `you-calendar-finder`, purpose: read
 >   free/busy of `@example.com` users for personal scheduling tooling.
 > - **Domain-wide delegation**: enabled on this service account. In Workspace
 >   Admin Console → Security → API Controls → Domain-wide Delegation, add

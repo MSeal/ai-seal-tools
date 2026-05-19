@@ -352,7 +352,7 @@ def test_load_attendee_timezones_normalizes_emails(tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
         "attendee_timezones:\n"
-        "  Alice@example.com: America/New_York\n"
+        "  Alice@Example.COM: America/New_York\n"
         "  bob@example.com:   Europe/Berlin\n"
     )
     tzs = fb.load_attendee_timezones(cfg)
@@ -432,7 +432,7 @@ def test_score_email_lookup_is_case_insensitive():
     end = _dt("2026-05-20T11:00:00-07:00")
     result = fb.score_slot(
         start, end, conflicts=[], work_start=dt.time(9), work_end=dt.time(17),
-        attendees=["Bob@example.com"],  # passed in mixed case
+        attendees=["Bob@Example.COM"],  # passed in mixed case
         attendee_timezones={"bob@example.com": "Europe/Berlin"},  # stored lowercased
     )
     assert any("outside working hours" in b["label"] for b in result["breakdown"])

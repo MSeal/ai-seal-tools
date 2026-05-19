@@ -12,11 +12,11 @@ returning the same SeniorityFields shape.
 The Glean record shape, as of 2026-05, looks roughly like:
 
     {
-      "name": "Matthew Seal",
+      "name": "Example User",
       "title": "Principal Engineer II",
       "department": "Cloud Infrastructure & Platform",
       "teams": ["CIP - Experiences", "Cloud Infrastructure & Platform"],
-      "email": "mseal@confluent.io",
+      "email": "you@example.com",
       "manager": {
         "title": "Director II, Engineering",
         "directReportsCount": 16,

@@ -18,7 +18,7 @@ UV_NO_CONFIG=1 uv run --script "$(dirname "$0")/freebusy.py" \
   --start  <ISO 8601> \
   --end    <ISO 8601> \
   --duration <minutes> \
-  [--impersonate mseal@confluent.io]    # only with service account
+  [--impersonate you@example.com]    # only with service account
   [--top 5]                              # how many ranked slots to return
 ```
 
@@ -37,7 +37,7 @@ Include the **requester's own email** in `--emails` — their conflicts matter t
 - `45 min sync with Carol, Dave, and Eve before Friday`
 
 Resolve the inputs into a concrete plan:
-- **Attendees**: emails preferred; names are OK if Google Calendar's autocomplete will find them in the Confluent directory. Always include the requester (`mseal@confluent.io` unless specified otherwise).
+- **Attendees**: emails preferred; names are OK if Google Calendar's autocomplete will find them in the Confluent directory. Always include the requester (`you@example.com` unless specified otherwise).
 - **Slack references** (`@handle` and `#channel`): resolve to emails *before* invoking `freebusy.py`. See the "Resolving Slack references" section below.
 - **Duration**: default 30 min if not specified.
 - **Date range**: convert relative phrases to absolute dates using today's date from the system context. **Always pass `--start >= now`**: never query for slots in the past. If the user says "this week" and it's already mid-afternoon Friday, snap `--start` to the next business-day morning rather than rewinding to Monday. **Never propose a slot whose start time has already passed** at the time of response. Default to the next 5 business days if unspecified.
@@ -67,7 +67,7 @@ A real Slack MCP would replace the Glean fallback with authoritative lookups; th
 
 ```json
 {
-  "attendees": ["mseal@confluent.io", "alice@example.com"],
+  "attendees": ["you@example.com", "alice@example.com"],
   "range": {"start": "...", "end": "..."},
   "duration_minutes": 60,
   "working_hours": {"start": 9, "end": 17},
@@ -185,7 +185,7 @@ When ambiguous, ask once. Otherwise, default to API path.
 **Rules of engagement (both paths):**
 
 - **Confirm before sending invites to others.** Picking a slot in chat ("Mon 1:30 works") is not the same as authorizing invites to go out. If the user hasn't used an explicit booking verb, propose what you'd send (summary, attendees, conference type) and wait for a "yes". Once they say "book it" with an explicit verb, you have consent for that single event — don't keep booking subsequent events implicitly.
-- **Use a summary that reads well in invitees' inboxes.** Not "[Meeting]" or "Quick chat" — be specific: "AI tooling sync — mseal + eve", "Hiring debrief: <candidate>". Pull from the conversation context.
+- **Use a summary that reads well in invitees' inboxes.** Not "[Meeting]" or "Quick chat" — be specific: "AI tooling sync — you + eve", "Hiring debrief: <candidate>". Pull from the conversation context.
 - **Pass attendee emails resolved by the Slack-ref tool**, not raw `@handles`. Every attendee should be `<local>@example.com` form.
 - **Echo the result** with the event's HTML link (click-to-edit) and the conference join URL.
 - **Don't auto-log this as an outcome** — `record_outcome.py` is for tracking ask-to-move outcomes, not event creation.
@@ -341,9 +341,9 @@ These are heuristics. The user's judgment overrides — if Alice's "1:1" is with
 TMP=$(mktemp); ...freebusy.py ... > $TMP
 uv run --script "$(dirname "$0")/render_slot.py" \
   --from "$TMP" \
-  --attendees mseal@confluent.io,alice@example.com \
-  --requester mseal@confluent.io \
-  --names "mseal@confluent.io=Matthew Seal,alice@example.com=Alice Example" \
+  --attendees you@example.com,alice@example.com \
+  --requester you@example.com \
+  --names "you@example.com=Example User,alice@example.com=Alice Lee" \
   --top 5
 ```
 
@@ -355,7 +355,7 @@ The renderer outputs each slot as:
 N. **<Day, Mon D> · <start>–<end>** (<N> min) — Score <N> · <one-line summary>
 ```
                     H:MM   H:MM   H:MM   H:MM
-mseal (you)         ─────  ─────  ─────       (no conflict → clean dashes)
+you (you)         ─────  ─────  ─────       (no conflict → clean dashes)
 alice               ░░░░░  ░░░░░  ─────       "Conflict name" (movability 8)
 ```
 ```

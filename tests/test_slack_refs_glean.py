@@ -32,9 +32,9 @@ def test_parse_handle_pairs_user_input_with_glean_email():
 
 
 def test_parse_handle_strips_leading_at_and_lowercases():
-    """User might pass '@eve' verbatim; we normalize."""
-    record = {"email": "eve@example.com"}
-    h = sg.parse_glean_person_to_handle(record, handle="@eve")
+    """User might pass '@Eve' verbatim; we normalize."""
+    record = {"email": "Eve@Example.com"}
+    h = sg.parse_glean_person_to_handle(record, handle="@Eve")
     assert h.handle == "eve"
     assert h.email == "eve@example.com"
 

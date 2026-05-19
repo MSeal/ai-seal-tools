@@ -201,17 +201,17 @@ def test_tick_glyph_opaque_beats_visible():
 
 
 def test_row_label_marks_requester():
-    label = rs.row_label("mseal@confluent.io", "mseal@confluent.io")
-    assert label.strip() == "mseal (you)"
+    label = rs.row_label("you@example.com", "you@example.com")
+    assert label.strip() == "you (you)"
 
 
 def test_row_label_case_insensitive_match():
-    label = rs.row_label("MSeal@Confluent.io", "mseal@confluent.io")
-    assert label.strip() == "MSeal (you)"
+    label = rs.row_label("You@Example.com", "you@example.com")
+    assert label.strip() == "You (you)"
 
 
 def test_row_label_non_requester_just_local_part():
-    label = rs.row_label("alice@example.com", "mseal@confluent.io")
+    label = rs.row_label("alice@example.com", "you@example.com")
     assert label.strip() == "alice"
 
 
@@ -223,7 +223,7 @@ def test_row_label_truncates_overlong_emails():
 
 
 def test_row_label_padded_to_width():
-    label = rs.row_label("a@x", "mseal@confluent.io", width=10)
+    label = rs.row_label("a@x", "you@example.com", width=10)
     assert len(label) == 10
 
 
@@ -241,12 +241,12 @@ def test_row_label_uses_display_name_when_provided():
 
 def test_row_label_display_name_with_requester_suffix():
     label = rs.row_label(
-        "mseal@confluent.io",
-        "mseal@confluent.io",
-        names={"mseal@confluent.io": "Matthew Seal"},
+        "you@example.com",
+        "you@example.com",
+        names={"you@example.com": "Example User"},
         width=20,
     )
-    assert label.strip() == "Matthew Seal (you)"
+    assert label.strip() == "Example User (you)"
 
 
 def test_row_label_falls_back_to_local_part_for_unmapped_email():
@@ -266,10 +266,10 @@ def test_compute_row_label_width_picks_longest():
     width = rs._compute_row_label_width(
         ["a@x", "carol@example.com"],
         "a@x",
-        {"carol@example.com": "Carol Example"},
+        {"carol@example.com": "Carol Example User"},
     )
-    # "Carol Example" is 16 chars; min-width floor is higher, so 16 is fine.
-    assert width >= 16
+    # "Carol Example User" is 18 chars, above the 12-char floor, below 26 cap.
+    assert width == 18
 
 
 def test_compute_row_label_width_respects_min_floor():
@@ -300,23 +300,23 @@ def test_display_name_for_basic():
 
 
 def test_display_name_for_case_insensitive():
-    assert rs.display_name_for("carol@example.com", {"carol@example.com": "Carol Example"}) == "Carol Example"
+    assert rs.display_name_for("Carol@Example.com", {"carol@example.com": "Carol Example"}) == "Carol Example"
 
 
 def test_display_name_for_missing_falls_back():
-    assert rs.display_name_for("unknown@example.com", {"mseal@confluent.io": "Matthew"}) == "unknown"
+    assert rs.display_name_for("unknown@example.com", {"you@example.com": "Matthew"}) == "unknown"
 
 
 def test_display_name_for_no_mapping():
-    assert rs.display_name_for("mseal@confluent.io", None) == "mseal"
-    assert rs.display_name_for("mseal@confluent.io", {}) == "mseal"
+    assert rs.display_name_for("you@example.com", None) == "you"
+    assert rs.display_name_for("you@example.com", {}) == "you"
 
 
 def test_parse_names_arg_basic():
-    out = rs.parse_names_arg("mseal@confluent.io=Matthew Seal,alice@example.com=Alice Example")
+    out = rs.parse_names_arg("you@example.com=Example User,alice@example.com=Alice Lee")
     assert out == {
-        "mseal@confluent.io": "Matthew Seal",
-        "alice@example.com": "Alice Example",
+        "you@example.com": "Example User",
+        "alice@example.com": "Alice Lee",
     }
 
 
@@ -326,15 +326,15 @@ def test_parse_names_arg_empty():
 
 def test_parse_names_arg_lowercases_email_keys():
     """So lookup is uniform regardless of how the caller cased the email."""
-    out = rs.parse_names_arg("MSeal@Confluent.io=Matthew Seal")
-    assert "mseal@confluent.io" in out
+    out = rs.parse_names_arg("You@Example.com=Example User")
+    assert "you@example.com" in out
 
 
 def test_parse_names_arg_drops_malformed_entries():
     """Entries without '=' or with empty side are silently dropped — a
     bad mapping shouldn't kill the whole render."""
-    out = rs.parse_names_arg("mseal=Matthew,no-equals,=NoEmail,alice=alice")
-    assert out == {"mseal": "Matthew", "alice": "alice"}
+    out = rs.parse_names_arg("you=Matthew,no-equals,=NoEmail,alice=Alice")
+    assert out == {"you": "Matthew", "alice": "Alice"}
 
 
 # ---------------------------------------------------------------------------
@@ -388,17 +388,17 @@ def test_timeline_all_free_renders_dashes():
         _dt("2026-05-22T14:30:00-07:00"),
         _dt("2026-05-22T15:15:00-07:00"),
         [
-            ("mseal@confluent.io", []),
+            ("you@example.com", []),
             ("alice@example.com", []),
         ],
-        "mseal@confluent.io",
+        "you@example.com",
     )
     lines = out.splitlines()
     # Header has time labels.
     assert "2:30" in lines[0]
     assert "3:15" in lines[0]
     # Two body rows, all dashes, no annotation.
-    assert lines[1].lstrip().startswith("mseal (you)")
+    assert lines[1].lstrip().startswith("you (you)")
     assert rs.GLYPH_FREE * rs.TICK_WIDTH in lines[1]
     assert "←" not in lines[1] and '"' not in lines[1]
 
@@ -410,16 +410,16 @@ def test_timeline_partial_conflict_glyph_spans_only_overlapping_ticks():
         _dt("2026-05-22T14:30:00-07:00"),
         _dt("2026-05-22T15:15:00-07:00"),
         [
-            ("mseal@confluent.io", [
+            ("you@example.com", [
                 _conflict(start="2026-05-22T14:30:00-07:00", end="2026-05-22T15:00:00-07:00", summary="Alex 1:1", movability=8),
             ]),
         ],
-        "mseal@confluent.io",
+        "you@example.com",
     )
-    mseal_row = next(l for l in out.splitlines() if "mseal" in l)
+    you_row = next(l for l in out.splitlines() if "you" in l)
     # Glyph order: easy, easy, free.
-    assert mseal_row.count(rs.GLYPH_EASY * rs.TICK_WIDTH) == 2
-    assert mseal_row.count(rs.GLYPH_FREE * rs.TICK_WIDTH) == 1
+    assert you_row.count(rs.GLYPH_EASY * rs.TICK_WIDTH) == 2
+    assert you_row.count(rs.GLYPH_FREE * rs.TICK_WIDTH) == 1
 
 
 def test_timeline_annotation_appended_to_conflict_row():
@@ -431,11 +431,11 @@ def test_timeline_annotation_appended_to_conflict_row():
                 _conflict(start="2026-05-22T14:30:00-07:00", end="2026-05-22T14:45:00-07:00", summary="Eng sync", movability=5),
             ]),
         ],
-        "mseal@confluent.io",
+        "you@example.com",
     )
-    erick_row = next(l for l in out.splitlines() if "alice" in l)
-    assert '"Eng sync"' in erick_row
-    assert "moderate; 5" in erick_row
+    alice_row = next(l for l in out.splitlines() if "alice" in l)
+    assert '"Eng sync"' in alice_row
+    assert "moderate; 5" in alice_row
 
 
 def test_timeline_requester_row_gets_self_marker_in_annotation():
@@ -443,14 +443,14 @@ def test_timeline_requester_row_gets_self_marker_in_annotation():
         _dt("2026-05-22T14:30:00-07:00"),
         _dt("2026-05-22T15:15:00-07:00"),
         [
-            ("mseal@confluent.io", [
+            ("you@example.com", [
                 _conflict(start="2026-05-22T14:30:00-07:00", end="2026-05-22T14:45:00-07:00", summary="Alex 1:1", movability=8),
             ]),
         ],
-        "mseal@confluent.io",
+        "you@example.com",
     )
-    mseal_row = next(l for l in out.splitlines() if "mseal" in l)
-    assert "← you" in mseal_row
+    you_row = next(l for l in out.splitlines() if "you" in l)
+    assert "← you" in you_row
 
 
 # ---------------------------------------------------------------------------
@@ -477,21 +477,21 @@ def _slot(
 def test_slot_card_all_free_has_header_and_timeline():
     card = rs.format_slot_card(
         _slot(start="2026-05-22T14:30:00-07:00", end="2026-05-22T15:15:00-07:00"),
-        attendees=["mseal@confluent.io", "alice@example.com"],
-        requester_email="mseal@confluent.io",
+        attendees=["you@example.com", "alice@example.com"],
+        requester_email="you@example.com",
         rank=1,
     )
     assert "1. **" in card
     assert "Score 100" in card
     assert "all free" in card
     assert "```" in card  # code block fence
-    assert "mseal (you)" in card
+    assert "you (you)" in card
     assert "alice" in card
 
 
 def test_slot_card_conflict_routes_to_correct_attendee():
     """A conflict whose `attendee` field points at alice should show up
-    on alice's row, not mseal's."""
+    on alice's row, not you's."""
     card = rs.format_slot_card(
         _slot(
             start="2026-05-22T14:30:00-07:00",
@@ -507,13 +507,13 @@ def test_slot_card_conflict_routes_to_correct_attendee():
                 ),
             }],
         ),
-        attendees=["mseal@confluent.io", "alice@example.com"],
-        requester_email="mseal@confluent.io",
+        attendees=["you@example.com", "alice@example.com"],
+        requester_email="you@example.com",
     )
-    mseal_row = next(l for l in card.splitlines() if "mseal" in l)
-    erick_row = next(l for l in card.splitlines() if "alice" in l and "mseal" not in l)
-    assert '"Eng sync"' in erick_row
-    assert '"Eng sync"' not in mseal_row
+    you_row = next(l for l in card.splitlines() if "you" in l)
+    alice_row = next(l for l in card.splitlines() if "alice" in l and "you" not in l)
+    assert '"Eng sync"' in alice_row
+    assert '"Eng sync"' not in you_row
 
 
 def test_slot_card_more_than_max_attendees_falls_back_to_list():
@@ -592,7 +592,7 @@ def test_slot_card_summary_flags_fixed_conflicts_with_warning():
                 ),
             }],
         ),
-        attendees=["mseal@confluent.io", "alice@x"],
+        attendees=["you@example.com", "alice@x"],
     )
     # Look for the warning marker only in the slot's header line
     # (the annotation also contains ⚠ but that's in the body).
@@ -606,23 +606,23 @@ def test_slot_card_full_names_replace_email_handles_in_timeline():
     handle in each attendee row for the display name."""
     card = rs.format_slot_card(
         _slot(start="2026-05-22T14:30:00-07:00", end="2026-05-22T15:00:00-07:00"),
-        attendees=["mseal@confluent.io", "carol@example.com"],
-        requester_email="mseal@confluent.io",
+        attendees=["you@example.com", "carol@example.com"],
+        requester_email="you@example.com",
         names={
-            "mseal@confluent.io": "Matthew Seal",
+            "you@example.com": "Example User",
             "carol@example.com": "Carol Example",
         },
     )
-    assert "Matthew Seal (you)" in card
+    assert "Example User (you)" in card
     assert "Carol Example" in card
-    assert "mseal " not in card  # email handle shouldn't leak
+    assert "you " not in card  # email handle shouldn't leak
     assert "carol " not in card
 
 
 def test_slot_card_header_includes_date_and_duration():
     card = rs.format_slot_card(
         _slot(start="2026-05-22T14:30:00-07:00", end="2026-05-22T15:15:00-07:00"),
-        attendees=["mseal@confluent.io"],
+        attendees=["you@example.com"],
     )
     assert "Fri, May 22" in card
     assert "45 min" in card

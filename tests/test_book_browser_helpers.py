@@ -97,9 +97,9 @@ class TestExtractEidFromUrl:
 class TestDecodeEid:
     def test_round_trip_with_padding_stripped(self):
         # Calendar emits eids without trailing '=' padding; helper must re-pad.
-        raw = "pjc9sh0amnhj00hkeuar400gv4 mseal@confluent.io"
+        raw = "pjc9sh0amnhj00hkeuar400gv4 you@example.com"
         eid = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
-        assert h.decode_eid(eid) == ("pjc9sh0amnhj00hkeuar400gv4", "mseal@confluent.io")
+        assert h.decode_eid(eid) == ("pjc9sh0amnhj00hkeuar400gv4", "you@example.com")
 
     def test_round_trip_with_padding_kept(self):
         raw = "abc123 someone@example.com"
@@ -114,7 +114,7 @@ class TestDecodeEid:
         assert h.decode_eid(eid) is None
 
     def test_empty_event_id_returns_none(self):
-        eid = base64.urlsafe_b64encode(b" mseal@confluent.io").decode().rstrip("=")
+        eid = base64.urlsafe_b64encode(b" you@example.com").decode().rstrip("=")
         assert h.decode_eid(eid) is None
 
     def test_empty_email_returns_none(self):
@@ -132,8 +132,8 @@ class TestExtractZoomUrl:
         assert h.extract_zoom_url(text) == "https://confluent.zoom.us/j/1234567890?pwd=abc"
 
     def test_personal_room(self):
-        text = "Zoom https://confluent.zoom.us/my/mseal more info"
-        assert h.extract_zoom_url(text) == "https://confluent.zoom.us/my/mseal"
+        text = "Zoom https://confluent.zoom.us/my/you more info"
+        assert h.extract_zoom_url(text) == "https://confluent.zoom.us/my/you"
 
     def test_webinar_form(self):
         text = "https://confluent.zoom.us/w/987654 trailing"
@@ -178,7 +178,7 @@ class TestShapeResponse:
             summary="Test sync",
             start=dt.datetime(2026, 5, 22, 9, 0, tzinfo=dt.timezone(dt.timedelta(hours=-7))),
             end=dt.datetime(2026, 5, 22, 9, 30, tzinfo=dt.timezone(dt.timedelta(hours=-7))),
-            attendees=["mseal@confluent.io", "eve@example.com"],
+            attendees=["you@example.com", "eve@example.com"],
         )
         base.update(overrides)
         return base
@@ -191,7 +191,7 @@ class TestShapeResponse:
         assert r["conference_solution"] == "Zoom Meeting"
         assert "browser path" in r["conference_status"]
         assert r["summary"] == "Test sync"
-        assert r["attendees"] == ["mseal@confluent.io", "eve@example.com"]
+        assert r["attendees"] == ["you@example.com", "eve@example.com"]
         assert r["start"].startswith("2026-05-22T09:00:00")
         assert r["end"].startswith("2026-05-22T09:30:00")
 

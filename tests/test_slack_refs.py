@@ -29,7 +29,7 @@ def test_load_handles_rich_record(tmp_path):
     path.write_text(
         "handles:\n"
         "  eve:\n"
-        "    email: eve@example.com\n"
+        "    email: Eve@Example.com\n"
         "    source: glean\n"
         "    fetched_at: '2026-05-15T10:00:00-07:00'\n"
     )
@@ -113,7 +113,7 @@ def test_lookup_handle_accepts_leading_at_and_case(tmp_path):
     handles = sr.load_handles(path)
     assert sr.lookup_handle("eve", handles) == "eve@x"
     assert sr.lookup_handle("@eve", handles) == "eve@x"
-    assert sr.lookup_handle("@eve", handles) == "eve@x"
+    assert sr.lookup_handle("@EVE", handles) == "eve@x"
     assert sr.lookup_handle("unknown", handles) is None
 
 
@@ -137,7 +137,7 @@ def test_reverse_email_to_handle_finds_handle_by_email(tmp_path):
     path.write_text("handles:\n  eve: eve@x\n  alice: alice@x\n")
     handles = sr.load_handles(path)
     assert sr.reverse_email_to_handle("eve@x", handles) == "eve"
-    assert sr.reverse_email_to_handle("eve@X", handles) == "eve"
+    assert sr.reverse_email_to_handle("Eve@X", handles) == "eve"
     assert sr.reverse_email_to_handle("unknown@x", handles) is None
 
 

@@ -12,8 +12,8 @@ import seniority_glean
 def test_parse_glean_record_full_shape():
     """The realistic full shape we observed from app=people during scoping."""
     record = {
-        "name": "Matthew Seal",
-        "email": "mseal@confluent.io",
+        "name": "Example User",
+        "email": "you@example.com",
         "title": "Principal Engineer II",
         "department": "Cloud Infrastructure & Platform",
         "teams": ["CIP - Experiences", "Cloud Infrastructure & Platform", "Announcements Global"],
@@ -28,7 +28,7 @@ def test_parse_glean_record_full_shape():
     }
     fields = seniority_glean.parse_glean_record(record)
     assert isinstance(fields, seniority.SeniorityFields)
-    assert fields.email == "mseal@confluent.io"
+    assert fields.email == "you@example.com"
     assert fields.title == "Principal Engineer II"
     assert fields.department == "Cloud Infrastructure & Platform"
     assert fields.teams == (
@@ -43,7 +43,7 @@ def test_parse_glean_record_full_shape():
 
 def test_parse_glean_record_lowercases_email():
     """Glean sometimes returns mixed-case emails; we standardize to lower."""
-    record = {"email": "Alice@example.com", "title": "VP, Engineering"}
+    record = {"email": "Alice@Example.com", "title": "VP, Engineering"}
     fields = seniority_glean.parse_glean_record(record)
     assert fields.email == "alice@example.com"
 

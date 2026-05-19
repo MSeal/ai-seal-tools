@@ -108,10 +108,10 @@ def test_load_seniority_accepts_rich_records(tmp_path):
 def test_load_seniority_lowercases_emails(tmp_path):
     """Email keys are lowercased for case-insensitive lookups."""
     path = tmp_path / "s.yaml"
-    path.write_text("seniority:\n  Alice@example.com: 4\n")
+    path.write_text("seniority:\n  Alice@Example.com: 4\n")
     out = sn.load_seniority(path)
     assert "alice@example.com" in out
-    assert "Alice@example.com" not in out
+    assert "Alice@Example.com" not in out
 
 
 def test_load_seniority_skips_malformed(tmp_path, capsys):

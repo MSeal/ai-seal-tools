@@ -72,12 +72,12 @@ def test_build_body_marks_organizer_accepted_when_in_attendees():
         _dt("2026-05-18T13:30:00-07:00"),
         _dt("2026-05-18T14:00:00-07:00"),
         summary="x",
-        attendees=["mseal@confluent.io", "alice@example.com"],
+        attendees=["you@example.com", "alice@example.com"],
         conference="none",
-        organizer_email="mseal@confluent.io",
+        organizer_email="you@example.com",
     )
     assert body["attendees"] == [
-        {"email": "mseal@confluent.io", "responseStatus": "accepted"},
+        {"email": "you@example.com", "responseStatus": "accepted"},
         {"email": "alice@example.com"},
     ]
 
@@ -89,12 +89,12 @@ def test_build_body_organizer_match_is_case_insensitive():
         _dt("2026-05-18T13:30:00-07:00"),
         _dt("2026-05-18T14:00:00-07:00"),
         summary="x",
-        attendees=["MSeal@Confluent.io"],
+        attendees=["You@Example.com"],
         conference="none",
-        organizer_email="mseal@CONFLUENT.io",
+        organizer_email="you@Example.com",
     )
     assert body["attendees"] == [
-        {"email": "mseal@confluent.io", "responseStatus": "accepted"},
+        {"email": "you@example.com", "responseStatus": "accepted"},
     ]
 
 
@@ -123,7 +123,7 @@ def test_build_body_organizer_not_in_attendees_no_op():
         summary="self-only hold",
         attendees=["someone-else@x"],
         conference="none",
-        organizer_email="mseal@confluent.io",
+        organizer_email="you@example.com",
     )
     assert body["attendees"] == [{"email": "someone-else@x"}]
 
@@ -137,13 +137,13 @@ def test_build_body_zoom_uses_hand_crafted_conference_data():
         summary="x",
         attendees=["a@x"],
         conference="zoom",
-        zoom_url="https://confluent.zoom.us/my/mseal",
+        zoom_url="https://confluent.zoom.us/my/you",
     )
     conf = body["conferenceData"]
     assert "createRequest" not in conf  # not how we build Zoom anymore
     assert conf["conferenceSolution"]["key"]["type"] == "addOn"
     assert conf["conferenceSolution"]["name"] == "Zoom Meeting"
-    assert conf["entryPoints"][0]["uri"] == "https://confluent.zoom.us/my/mseal"
+    assert conf["entryPoints"][0]["uri"] == "https://confluent.zoom.us/my/you"
     assert conf["entryPoints"][0]["entryPointType"] == "video"
 
 
@@ -240,18 +240,18 @@ def test_ensure_organizer_accepted_patches_when_needs_action():
     them to accepted with sendUpdates='none'."""
     svc = mock.MagicMock()
     patched_response = _event_with_organizer(
-        "mseal@confluent.io",
+        "you@example.com",
         [
-            {"email": "mseal@confluent.io", "responseStatus": "accepted"},
+            {"email": "you@example.com", "responseStatus": "accepted"},
             {"email": "alice@example.com"},
         ],
     )
     svc.events.return_value.patch.return_value.execute.return_value = patched_response
 
     event = _event_with_organizer(
-        "mseal@confluent.io",
+        "you@example.com",
         [
-            {"email": "mseal@confluent.io", "responseStatus": "needsAction"},
+            {"email": "you@example.com", "responseStatus": "needsAction"},
             {"email": "alice@example.com"},
         ],
     )
@@ -262,7 +262,7 @@ def test_ensure_organizer_accepted_patches_when_needs_action():
     assert call.kwargs["sendUpdates"] == "none"
     assert call.kwargs["eventId"] == "abc"
     body_attendees = call.kwargs["body"]["attendees"]
-    self_entry = next(a for a in body_attendees if a["email"] == "mseal@confluent.io")
+    self_entry = next(a for a in body_attendees if a["email"] == "you@example.com")
     assert self_entry["responseStatus"] == "accepted"
     assert result == patched_response
 
@@ -272,9 +272,9 @@ def test_ensure_organizer_accepted_noop_when_already_accepted():
     sent — saves a round-trip and avoids any side effects."""
     svc = mock.MagicMock()
     event = _event_with_organizer(
-        "mseal@confluent.io",
+        "you@example.com",
         [
-            {"email": "mseal@confluent.io", "responseStatus": "accepted"},
+            {"email": "you@example.com", "responseStatus": "accepted"},
             {"email": "alice@example.com"},
         ],
     )
@@ -288,7 +288,7 @@ def test_ensure_organizer_accepted_noop_when_organizer_not_in_attendees():
     nothing to patch."""
     svc = mock.MagicMock()
     event = _event_with_organizer(
-        "mseal@confluent.io",
+        "you@example.com",
         [{"email": "alice@x", "responseStatus": "needsAction"}],
     )
     result = ce._ensure_organizer_accepted(svc, event)
@@ -317,8 +317,8 @@ def test_ensure_organizer_accepted_swallows_http_errors(capsys):
     svc.events.return_value.patch.return_value.execute.side_effect = err
 
     event = _event_with_organizer(
-        "mseal@confluent.io",
-        [{"email": "mseal@confluent.io", "responseStatus": "needsAction"}],
+        "you@example.com",
+        [{"email": "you@example.com", "responseStatus": "needsAction"}],
     )
     result = ce._ensure_organizer_accepted(svc, event)
     assert result is event  # original returned
@@ -433,8 +433,8 @@ def test_load_zoom_personal_url_missing_file_none(tmp_path):
 
 def test_load_zoom_personal_url_returns_value(tmp_path):
     path = tmp_path / "x.yaml"
-    path.write_text('zoom_personal_meeting_url: "https://confluent.zoom.us/my/mseal"\n')
-    assert ce.load_zoom_personal_url(path) == "https://confluent.zoom.us/my/mseal"
+    path.write_text('zoom_personal_meeting_url: "https://confluent.zoom.us/my/you"\n')
+    assert ce.load_zoom_personal_url(path) == "https://confluent.zoom.us/my/you"
 
 
 def test_load_zoom_personal_url_empty_string_returns_none(tmp_path):
@@ -550,7 +550,7 @@ def test_cli_dry_run_prints_body_without_auth(tmp_path):
             "--summary", "Quick chat",
             "--attendees", "alice@x,bob@x",
             "--conference", "zoom",
-            "--zoom-url", "https://confluent.zoom.us/my/mseal",
+            "--zoom-url", "https://confluent.zoom.us/my/you",
             "--dry-run",
         ],
         capture_output=True, text=True,
@@ -563,7 +563,7 @@ def test_cli_dry_run_prints_body_without_auth(tmp_path):
     conf = out["would_send"]["conferenceData"]
     assert "createRequest" not in conf
     assert conf["conferenceSolution"]["name"] == "Zoom Meeting"
-    assert conf["entryPoints"][0]["uri"] == "https://confluent.zoom.us/my/mseal"
+    assert conf["entryPoints"][0]["uri"] == "https://confluent.zoom.us/my/you"
 
 
 def test_cli_help_works():

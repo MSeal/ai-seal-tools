@@ -26,13 +26,13 @@ note — at that point it's a coordination problem, not a scheduling one.
 Usage:
   # Single slot via stdin
   echo '<slot-json>' | render_slot.py \\
-      --attendees mseal@confluent.io,alice@example.com \\
-      --requester mseal@confluent.io --rank 1
+      --attendees you@example.com,alice@example.com \\
+      --requester you@example.com --rank 1
 
   # Full freebusy.py output, render the top N slots
   render_slot.py --from freebusy.json \\
-      --attendees mseal@confluent.io,alice@example.com \\
-      --requester mseal@confluent.io --top 5
+      --attendees you@example.com,alice@example.com \\
+      --requester you@example.com --top 5
 """
 
 from __future__ import annotations
