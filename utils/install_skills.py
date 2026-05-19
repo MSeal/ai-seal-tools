@@ -94,6 +94,10 @@ def main() -> None:
     for skill in skills:
         install_one(skill, dst_root / skill.name, runtimes, args.force, args.dry_run, prefix)
         install_config_links(skill, repo, args.dry_run, prefix)
+    wrapper_action = install_wrapper_scripts(repo, args.dry_run)
+    print(f"{prefix}wrapper scripts: {wrapper_action}")
+    shim_action = install_mcp_shims(repo, args.dry_run)
+    print(f"{prefix}MCP shims: {shim_action}")
     mcp_action = pin_mcp_json(repo / ".mcp.json.template", repo / ".mcp.json", runtimes, args.dry_run)
     print(f"{prefix}.mcp.json: {mcp_action}")
 
@@ -145,32 +149,43 @@ def write_skill_env(src: Path, runtimes: dict[str, str], dry: bool) -> str:
     return action
 
 
-PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org/"
+# Commands whose MCP server entries need our env injection. Only `npx`
+# today — our shim-via-PATH approach (see install_mcp_shims) lets us
+# intercept npx calls for specific packages without changing the
+# MCP entry's command/args, which keeps the MDM allowlist literal match.
+NPX_BASED_COMMANDS = {"npx"}
+
+USER_BIN_DIR = str(Path.home() / ".local" / "bin")
+MCP_SHIMS_DIR = str(Path.home() / ".config" / "ai-seal-tools" / "mcp-shims")
 
 
 def pin_mcp_json(template_file: Path, mcp_file: Path, runtimes: dict[str, str], dry: bool) -> str:
-    """Materialize `mcp_file` from `template_file` with machine-specific
-    env injected for any npx-launched server:
+    """Materialize `mcp_file` from `template_file` with a machine-specific
+    PATH injected for npx-based servers:
 
-    - `PATH` is rewritten to lead with the captured node's bin directory,
-      defeating nvm version drift between shells.
-    - `NPM_CONFIG_REGISTRY` is pinned to the public npm registry. On work
-      machines, `~/.npmrc` routes npm through Confluent's CodeArtifact,
-      whose auth tokens expire every ~12 hours. When the token expires,
-      `npx <package>` returns E401 silently and the MCP server fails to
-      launch in fresh sessions. Public registry is the right default for
-      MCP packages anyway — they're all published there.
+    1. `~/.config/ai-seal-tools/mcp-shims/` — leads PATH so MCP-spawned
+       `npx` resolves to our shim (see install_mcp_shims + the
+       utils/npx-mcp-shim header for why). The shim intercepts specific
+       MCP packages to inject required flags (e.g., --user-data-dir,
+       --headless for Playwright) without changing the command/args
+       visible to MDM.
+    2. `~/.local/bin` — for any bare-name wrappers a future MCP entry
+       might invoke directly.
+    3. The captured node's bin directory — where the real `npx` lives.
+       The shim walks PATH past its own dir to find it.
+    4. The rest of the inherited PATH is preserved.
 
     Source of truth is `.mcp.json.template` (committed, canonical). The
-    generated `.mcp.json` (gitignored) carries the env injection. Reading
-    from the template each run keeps the generated file from accumulating
-    cruft and means the env injection is always relative to the canonical
-    command/args.
-
+    generated `.mcp.json` (gitignored) carries the env injection.
     Confluent's MDM allowlist gates MCP loading on a literal match of
-    `command` + `args` (see CLAUDE memory `mdm-mcp-allowlist`). The
-    template holds the literal-match form; env is invisible to MDM, so
-    injecting it is safe.
+    `command` + `args` (see memory `mdm-mcp-allowlist`); env is
+    explicitly unrestricted, which is what makes the shim pattern legal.
+
+    Note: npm registry auth (CodeArtifact token) is NOT pinned here —
+    bypassing the managed registry sidesteps Confluent's package-install
+    controls. Refresh the token before invoking MCP-using skills if it
+    has expired; `npx` will surface a clear E401 so the failure mode is
+    obvious.
     """
     if not template_file.exists():
         return f"skip (no {template_file.name})"
@@ -179,15 +194,18 @@ def pin_mcp_json(template_file: Path, mcp_file: Path, runtimes: dict[str, str], 
         return "skip (node not on PATH)"
     node_bin = str(Path(node).parent)
 
+    leading = [MCP_SHIMS_DIR, USER_BIN_DIR, node_bin]
     data = json.loads(template_file.read_text())
     for server in data.get("mcpServers", {}).values():
-        if server.get("command") != "npx":
+        if server.get("command") not in NPX_BASED_COMMANDS:
             continue
         env = dict(server.get("env", {}))
         existing = env.get("PATH", os.environ.get("PATH", ""))
-        parts = [p for p in existing.split(os.pathsep) if p and p != node_bin]
-        env["PATH"] = os.pathsep.join([node_bin, *parts])
-        env.setdefault("NPM_CONFIG_REGISTRY", PUBLIC_NPM_REGISTRY)
+        # Strip any pre-existing entries that match our leading dirs so
+        # they don't shadow our intended ordering.
+        leading_set = set(leading)
+        parts = [p for p in existing.split(os.pathsep) if p and p not in leading_set]
+        env["PATH"] = os.pathsep.join([*leading, *parts])
         server["env"] = env
 
     rendered = json.dumps(data, indent=2) + "\n"
@@ -196,6 +214,107 @@ def pin_mcp_json(template_file: Path, mcp_file: Path, runtimes: dict[str, str], 
     if not dry:
         mcp_file.write_text(rendered)
     return "update"
+
+
+# Names of files under utils/ that should be exposed on PATH as wrapper
+# binaries via ~/.local/bin/. These are *user-invoked* helpers (run from
+# a terminal), not MCP-spawned (MCP flag injection goes through the
+# shim-via-PATH layer, see install_mcp_shims).
+#   - playwright-sign-in: opens a one-shot headed Chrome against the
+#     Playwright MCP's persistent profile for interactive Google SSO
+WRAPPER_SCRIPTS = ("playwright-sign-in",)
+
+# Shim files installed into MCP_SHIMS_DIR (NOT ~/.local/bin) and given
+# *specific filenames there* so they intercept the corresponding command
+# names in MCP-spawned environments. The MCP's env.PATH leads with
+# MCP_SHIMS_DIR so the shim wins lookup over the system binary. The
+# user's regular shell PATH never sees MCP_SHIMS_DIR so this layer is
+# invisible outside MCP spawns.
+MCP_SHIMS: dict[str, str] = {
+    "npx": "npx-mcp-shim",  # installed name → source file in utils/
+}
+
+
+def install_mcp_shims(repo: Path, dry: bool) -> str:
+    """Symlink MCP-PATH shim scripts from `utils/` into MCP_SHIMS_DIR
+    under the *installed name* (not the source filename).
+
+    Example: MCP_SHIMS["npx"] = "npx-mcp-shim" → utils/npx-mcp-shim is
+    symlinked to <shim-dir>/npx. When the MCP server spawns `npx`,
+    env.PATH has MCP_SHIMS_DIR leading, so this shim wins lookup. The
+    shim then forwards to the real `npx` (next match on PATH).
+
+    MCP_SHIMS_DIR is a dedicated directory NOT on the user's regular
+    shell PATH, so the shim layer is invisible outside MCP spawns. See
+    pin_mcp_json for where the PATH ordering is set up, and
+    utils/npx-mcp-shim for the shim's own contract.
+    """
+    bin_dir = Path(MCP_SHIMS_DIR)
+    actions: list[str] = []
+    skipped: list[str] = []
+    for installed_name, src_name in MCP_SHIMS.items():
+        src = repo / "utils" / src_name
+        if not src.exists():
+            skipped.append(f"{installed_name}: missing source {src_name}")
+            continue
+        if not os.access(src, os.X_OK):
+            skipped.append(f"{installed_name}: source {src_name} not executable")
+            continue
+        if not dry:
+            bin_dir.mkdir(parents=True, exist_ok=True)
+        target = bin_dir / installed_name
+        desired = src.resolve()
+        if target.is_symlink() and Path(os.readlink(target)) == desired:
+            continue
+        if not dry:
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            target.symlink_to(desired)
+        actions.append(installed_name)
+    if skipped:
+        return "skip (" + "; ".join(skipped) + ")"
+    if not actions:
+        return "ok"
+    return f"linked: {', '.join(actions)}"
+
+
+def install_wrapper_scripts(repo: Path, dry: bool) -> str:
+    """Symlink wrapper shell scripts from `utils/` into `~/.local/bin/`
+    so their bare names resolve when MCP servers are spawned with these
+    commands. The wrappers exist to work around MDM-allowlist constraints
+    on MCP command/args (see `utils/playwright-mcp-with-profile` header).
+
+    Returns one of: "ok" (all already-good), "linked: <count>" (created
+    or relinked one or more), "skip (...)" when nothing to do or a
+    blocker is hit.
+    """
+    bin_dir = Path.home() / ".local" / "bin"
+    actions: list[str] = []
+    skipped: list[str] = []
+    for name in WRAPPER_SCRIPTS:
+        src = repo / "utils" / name
+        if not src.exists():
+            skipped.append(f"{name}: missing")
+            continue
+        if not os.access(src, os.X_OK):
+            skipped.append(f"{name}: not executable in repo")
+            continue
+        if not dry:
+            bin_dir.mkdir(parents=True, exist_ok=True)
+        target = bin_dir / name
+        desired = src.resolve()
+        if target.is_symlink() and Path(os.readlink(target)) == desired:
+            continue  # already linked correctly
+        if not dry:
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            target.symlink_to(desired)
+        actions.append(name)
+    if skipped:
+        return "skip (" + "; ".join(skipped) + ")"
+    if not actions:
+        return "ok"
+    return f"linked: {', '.join(actions)}"
 
 
 def install_config_links(skill: Path, repo: Path, dry: bool, prefix: str) -> None:

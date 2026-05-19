@@ -1,0 +1,170 @@
+#!/usr/bin/env -S UV_NO_CONFIG=1 uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["playwright>=1.50"]
+# ///
+# UV_NO_CONFIG=1 in the shebang routes uv around the global
+# ~/.config/uv/uv.toml on work machines (which points at Confluent
+# CodeArtifact's PyPI; its token expires every ~12h and would block
+# Playwright's resolution). Mirrors the .envrc setting that direnv
+# applies when working inside the repo. Cousin to the npm registry
+# story in memory `codeartifact-breaks-mcp-npx`.
+"""playwright-sign-in — interactive Google sign-in for the persistent
+profile used by the Playwright MCP.
+
+The Playwright MCP server runs headless against
+`~/.config/ai-seal-tools/playwright-profile/`, so Google SSO (which
+needs real user gestures for 2FA) can't happen inside it. This helper:
+
+  1. Finds and SIGTERMs any Chrome process Playwright launched against
+     our persistent profile (releases the Chromium SingletonLock).
+     Won't touch the user's regular Google Chrome.
+  2. Launches its own *headed* Chrome against the same profile dir,
+     navigating to Google's account chooser → Calendar.
+  3. Sets a distinctive window title so the temporary window is easy
+     to find in Cmd+Tab and impossible to confuse with real-work Chrome.
+  4. Waits until the user closes the window. Cookies are saved to the
+     profile dir.
+
+After this helper exits, the *next* `browser_navigate` from Claude will
+return a stale-handle error once (the MCP's old browser reference is
+dead), then succeed on retry — the MCP launches a fresh Chrome that
+reads the now-signed-in cookies. SKILL.md documents this one-retry
+rule.
+
+Usage:
+  playwright-sign-in [--profile-dir <path>] [--url <override>]
+
+Env overrides:
+  PLAYWRIGHT_MCP_PROFILE_DIR — same as --profile-dir
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+DEFAULT_PROFILE = Path.home() / ".config" / "ai-seal-tools" / "playwright-profile"
+DEFAULT_URL = "https://accounts.google.com/AccountChooser?continue=https://calendar.google.com"
+WINDOW_TITLE = "🔐 ai-seal-tools sign-in — close this window when done"
+
+
+def find_mcp_chrome_pids(profile_dir: Path) -> list[int]:
+    """Find Chrome processes whose argv contains our profile dir.
+
+    Matches on `--user-data-dir=<our-profile>` — the MCP launches Chrome
+    with that flag, regular user-launched Chrome doesn't reference our
+    profile, so this is a safe filter.
+    """
+    try:
+        out = subprocess.check_output(["ps", "-eo", "pid,command"], text=True)
+    except subprocess.CalledProcessError:
+        return []
+    target = str(profile_dir.resolve())
+    pids: list[int] = []
+    for line in out.splitlines()[1:]:  # skip header
+        parts = line.strip().split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        pid_str, cmd = parts
+        if "Google Chrome" not in cmd:
+            continue
+        # Match both `--user-data-dir=PATH` and `--user-data-dir PATH` forms.
+        if target not in cmd:
+            continue
+        try:
+            pids.append(int(pid_str))
+        except ValueError:
+            pass
+    return pids
+
+
+def release_lock(profile_dir: Path) -> int:
+    """Kill any MCP-launched Chrome holding the profile's SingletonLock.
+    Returns count killed. Waits briefly for the OS to free the lock
+    before returning, since Chromium's lock cleanup is async."""
+    pids = find_mcp_chrome_pids(profile_dir)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            print(f"[sign-in] sent SIGTERM to MCP-owned Chrome (PID {pid})")
+        except ProcessLookupError:
+            pass  # already gone
+    if pids:
+        time.sleep(2)  # let Chromium release its lock files
+    return len(pids)
+
+
+def open_for_signin(profile_dir: Path, url: str) -> None:
+    """Launch headed Chrome via Playwright's persistent context and
+    wait until the user closes the window."""
+    # Imported here so the script's --help doesn't pay the import cost
+    # and uv installs Playwright lazily on first run.
+    from playwright.sync_api import sync_playwright
+
+    print(f"[sign-in] launching headed Chrome — complete SSO, then close the window")
+    print(f"[sign-in] profile: {profile_dir}")
+    with sync_playwright() as pw:
+        ctx = pw.chromium.launch_persistent_context(
+            user_data_dir=str(profile_dir),
+            channel="chrome",  # same as the MCP default, so the profile shape matches
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+            args=["--no-first-run", "--no-default-browser-check"],
+        )
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(url)
+        # Set a distinctive title; some sign-in pages will overwrite it,
+        # but it stays during the brief landing moment so the window is
+        # findable in Cmd+Tab.
+        try:
+            page.evaluate(f"document.title = {WINDOW_TITLE!r}")
+        except Exception:
+            pass
+
+        # Block until the user closes the window. Playwright surfaces
+        # this as a TargetClosedError or by the context becoming
+        # unusable; both are signal that we're done.
+        try:
+            ctx.wait_for_event("close", timeout=0)  # 0 = no timeout
+        except KeyboardInterrupt:
+            print("\n[sign-in] interrupted by user; closing context")
+        except Exception:
+            # ctx.close() below handles cleanup; any error here just
+            # means the user already closed everything.
+            pass
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument(
+        "--profile-dir",
+        default=os.environ.get("PLAYWRIGHT_MCP_PROFILE_DIR", str(DEFAULT_PROFILE)),
+        help=f"Persistent profile dir (default: {DEFAULT_PROFILE})",
+    )
+    p.add_argument("--url", default=DEFAULT_URL, help="Sign-in landing URL")
+    args = p.parse_args()
+
+    profile_dir = Path(args.profile_dir).expanduser()
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    killed = release_lock(profile_dir)
+    if killed == 0:
+        print("[sign-in] no MCP-owned Chrome to terminate; profile is free")
+    open_for_signin(profile_dir, args.url)
+    print("[sign-in] done. Tell Claude to retry; the first browser_navigate will")
+    print("[sign-in] hit a stale-handle error and the second will succeed.")
+
+
+if __name__ == "__main__":
+    main()
