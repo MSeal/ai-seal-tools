@@ -269,6 +269,36 @@ Follows the snapshot-driven / vision-fallback discipline in `prompts/browsing.md
 
 **Helpers:** `book_browser_helpers.py` carries the deterministic pieces (parsing `?eid=` from a Calendar URL, decoding the eid base64, extracting a Zoom URL from a snapshot, shaping a response when you skip the get_event re-query). Unit-tested in `tests/test_book_browser_helpers.py`.
 
+## Moving an existing event
+
+When the user already has the meeting on their calendar and just wants to **shift it** to a slot you ranked (rather than create a brand-new event with the same attendees), use `move_event.py`. Examples of the user's intent:
+
+- "Move my existing X meeting to that slot"
+- "Reschedule the Y review to Wednesday"
+- "Push the Foo sync to next week"
+
+This is preferred over delete-and-recreate because it:
+- Sends a single "event time changed" notification rather than a cancellation + a new invite (less noise for attendees).
+- Preserves the event ID — third-party integrations (Zoom Workspace, recording bots, agendas linked from Slack) keep working.
+- Preserves attendee RSVPs and any extra metadata (description, location, conferenceData, recurrence) that `events.patch` doesn't touch.
+
+```bash
+uv run --script "$(dirname "30-minute")/move_event.py" <event_id> \
+  --start <new start ISO 8601 with offset> \
+  --end   <new end ISO 8601 with offset> \
+  [--calendar primary] \
+  [--send-updates all|externalOnly|none]   # default 'all'
+  [--dry-run]
+```
+
+The output shape matches `create_event.summarize_response` — `event_id`, `html_link`, `join_url`, attendees, and the new start/end — so the post-action user-facing summary is consistent between a fresh booking and a move.
+
+**Finding the event ID.** If the user references the meeting by title rather than ID, look it up via `svc.events().list(..., q="<keyword>", singleEvents=True)` first — same auth/scope as `move_event.py`. The Capybara-meeting move pattern: search Friday's events for the title, extract the `id`, then call `move_event.py`.
+
+**Rules of engagement.** Same as booking — confirm before sending update emails to others. Calling `move_event.py` issues a reschedule notice to every attendee by default. If the user picked a slot but hasn't explicitly said "move it" / "reschedule it" / "shift it", propose the patch first and wait for a yes.
+
+**Don't try to move recurring-series instances** with this script unless the user specifies whether they mean *this one occurrence* or *the whole series*. The Calendar API has different IDs (`<series>_R<YYYYMMDDTHHMMSS>` for instances vs the master ID for the series); patching the wrong one moves the wrong thing. Ask first.
+
 ## Logging outcomes after an ask
 
 After the user reports back on how an ask went, log the outcome with `record_outcome.py` so future runs learn from it:
@@ -320,7 +350,9 @@ If `preferences_path` is null, the helper's structural ranking stands — use th
 | `tentative` (status) | 9 | (any title, status=tentative) | Not yet committed |
 | `one_on_one` | 8 | "1:1", "1/1", "Alice/Bob" | Recurring 1:1s are typically the easiest real meeting to shift |
 | `travel_block` | 7 | "Travel", "Commute", "WFH" | Reasonably flexible |
-| `meal` / `personal` | 6 | "Lunch", "Coffee", "Workout" | Negotiable for the person; ask politely |
+| `meal` (lunch/coffee) | 6 | "Lunch", "Coffee" | Negotiable for the person; ask politely |
+| `meal` (breakfast/dinner) | 3 | "Breakfast", "Dinner" | Bookend-of-day; typically anchored by family routine (school drop-off, kids' bedtime). Treat as ~fixed and don't ask to move. |
+| `personal` | 6 | "Workout", "Gym", "Yoga" | Negotiable for the person; ask politely |
 | `generic_meeting` | 5 | Anything not matched | Default — unknown movability |
 | `opaque` | 5 | (summary hidden by sharing) | Can't classify automatically; user has to ask the attendee |
 | `team_meeting`, `team_standup` | 5 | "Weekly sync", "Team standup" | Disrupts a group — possible but coordination cost |

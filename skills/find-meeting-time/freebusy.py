@@ -410,8 +410,15 @@ TITLE_RULES: list[tuple[re.Pattern[str], str, int]] = [
     (re.compile(r"\b(focus|deep\s*work|heads?\s*down|dnd|no\s*meetings?)\b", re.I), "focus_block", 10),
     (re.compile(r"\b(hold|placeholder|tentative|optional|block)\b", re.I), "personal_hold", 9),
     (re.compile(r"\b(travel|commute|wfh|working\s*location)\b", re.I), "travel_block", 7),
-    # Personal events
-    (re.compile(r"\b(lunch|coffee|breakfast|dinner)\b", re.I), "meal", 6),
+    # Personal events. Lunch & coffee are midday and genuinely shiftable
+    # (movability 6); breakfast & dinner sit at the bookends of someone's
+    # personal day and are usually anchored by family commitments (school
+    # drop-off, kids' bedtime, partner's schedule) — treat as ~fixed
+    # (movability 3) so the scorer treats them like other low-movability
+    # events. Both stay category="meal" so the lunch_overlap noon-band
+    # check fires correctly when relevant.
+    (re.compile(r"\b(breakfast|dinner)\b", re.I), "meal", 3),
+    (re.compile(r"\b(lunch|coffee)\b", re.I), "meal", 6),
     (re.compile(r"\b(workout|gym|run|yoga)\b", re.I), "personal", 6),
     # 1:1s — recurring 1:1s are typically the easiest real meeting to shift.
     (re.compile(r"\b(1\s*[:\-/x]\s*1|1on1|one\s*on\s*one)\b", re.I), "one_on_one", 8),

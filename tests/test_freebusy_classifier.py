@@ -147,6 +147,37 @@ def test_classify_all_day_generic_becomes_block():
     assert cls["movability"] == 1
 
 
+# Meals: lunch and coffee are midday/casual and reasonably shiftable.
+# Breakfast and dinner sit at the bookends of the personal day and are
+# anchored by family routine (school drop-off, kids' bedtime, partner's
+# schedule) — treat as ~fixed so the scorer doesn't propose moving them.
+# Regression on the original single-tier classifier (everything mapped
+# to movability 6, which let "Dinner" look as easy to shift as "Lunch").
+
+def test_classify_lunch_keeps_moderate_movability():
+    cls = fb.classify_event(_ev(summary="Lunch"))
+    assert cls["category"] == "meal"
+    assert cls["movability"] == 6
+
+
+def test_classify_coffee_keeps_moderate_movability():
+    cls = fb.classify_event(_ev(summary="Coffee with Alice"))
+    assert cls["category"] == "meal"
+    assert cls["movability"] == 6
+
+
+def test_classify_dinner_is_low_movability():
+    cls = fb.classify_event(_ev(summary="Dinner"))
+    assert cls["category"] == "meal"
+    assert cls["movability"] == 3
+
+
+def test_classify_breakfast_is_low_movability():
+    cls = fb.classify_event(_ev(summary="Breakfast meeting"))
+    assert cls["category"] == "meal"
+    assert cls["movability"] == 3
+
+
 # ---------------------------------------------------------------------------
 # event_blocks_time — which events actually conflict
 # ---------------------------------------------------------------------------
