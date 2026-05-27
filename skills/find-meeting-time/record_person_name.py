@@ -3,22 +3,37 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6.0"]
 # ///
-"""record_person_name.py — write resolved email→name pairs into
-people.yaml. Called by Claude in the find-meeting-time skill flow
-after a Glean lookup fills in display names that Calendar's
-attendees[].displayName didn't surface.
+"""record_person_name.py — write resolved email→{name,location,timezone}
+pairs into people.yaml. Called by Claude in the find-meeting-time skill
+flow after a Glean lookup fills in display names and locations that
+Calendar's attendees[].displayName / freebusy data didn't surface.
 
 Two modes:
 
 Single (after a Glean people lookup for one email):
   record_person_name.py single \\
       --email alice@example.com --name "Alice Example" \\
+      --location "GB Remote United Kingdom" \\
+      [--timezone Europe/London]   # override the inferred TZ
       --source glean
 
-Bulk (after a batch Glean lookup; stdin = JSON object email→name,
-where a name of null indicates "Glean couldn't find one"):
-  echo '{"alice@example.com": "Alice Example", ...}' | \\
-      record_person_name.py bulk --source glean
+  Either --name or --location can be omitted to update only the field
+  the caller has. --timezone, if not passed, is inferred from --location
+  via timezone_map.infer_timezone.
+
+Bulk (after a batch Glean lookup):
+
+  Old shape (name-only, backward compat):
+    {"alice@example.com": "Alice Example", ...}
+
+  New shape (rich per-person dicts):
+    {"alice@example.com": {"name": "Alice Example",
+                            "location": "GB Remote United Kingdom",
+                            "timezone": "Europe/London"}, ...}
+
+  Both shapes can be mixed in the same payload.
+
+  echo '<json>' | record_person_name.py bulk --source glean
 
 Updates last_seen only if the merged entry had no previous last_seen
 date (a Glean enrichment doesn't tell us when the user last met the
@@ -34,6 +49,8 @@ import sys
 from pathlib import Path
 
 import yaml
+
+from timezone_map import infer_timezone
 
 DEFAULT_PATH = Path.home() / ".config" / "ai-seal-tools" / "find-meeting-time" / "people.yaml"
 
@@ -55,6 +72,57 @@ def load(path: Path) -> dict:
     return data
 
 
+def merge_person(
+    data: dict,
+    email: str,
+    name: str | None = None,
+    *,
+    location: str | None = None,
+    timezone: str | None = None,
+    source: str,
+    fetched_at: str,
+) -> bool:
+    """Merge one email→person record into `data` in-place.
+
+    Returns True iff any persisted field changed. None-valued args
+    don't clobber an existing field — Glean might just not know that
+    bit yet (e.g., name resolved, location still pending).
+
+    If `location` is provided and `timezone` is not, the TZ is inferred
+    via timezone_map.infer_timezone and stored alongside the raw
+    location string."""
+    email = email.strip().lower()
+    if not email:
+        return False
+    people = data.setdefault("people", {})
+    entry = people.get(email) or {}
+    changed = False
+
+    if name and entry.get("name") != name:
+        entry["name"] = name
+        entry["name_fetched_at"] = fetched_at
+        changed = True
+    entry.setdefault("name_fetched_at", fetched_at)
+
+    if location and entry.get("location") != location:
+        entry["location"] = location
+        entry["location_fetched_at"] = fetched_at
+        changed = True
+
+    resolved_tz = timezone or (infer_timezone(location) if location else None)
+    if resolved_tz and entry.get("timezone") != resolved_tz:
+        entry["timezone"] = resolved_tz
+        changed = True
+
+    sources = entry.setdefault("sources", [])
+    if source not in sources:
+        sources.append(source)
+
+    people[email] = entry
+    return changed
+
+
+# Backward-compat alias — older callers / tests use merge_name.
 def merge_name(
     data: dict,
     email: str,
@@ -63,32 +131,30 @@ def merge_name(
     source: str,
     fetched_at: str,
 ) -> bool:
-    """Merge one email→name pair into `data` in-place. Returns True iff
-    the entry's name field changed (so the caller can count updates).
-    A name of None or empty doesn't clobber an existing name — Glean
-    might just not know."""
-    email = email.strip().lower()
-    if not email:
-        return False
-    people = data.setdefault("people", {})
-    entry = people.get(email) or {}
-    changed = False
-    if name and entry.get("name") != name:
-        entry["name"] = name
-        changed = True
-    sources = entry.setdefault("sources", [])
-    if source not in sources:
-        sources.append(source)
-    entry.setdefault("name_fetched_at", fetched_at)
-    if changed:
-        entry["name_fetched_at"] = fetched_at
-    people[email] = entry
-    return changed
+    """Deprecated alias; prefer merge_person."""
+    return merge_person(data, email, name, source=source, fetched_at=fetched_at)
 
 
 def save(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=True, allow_unicode=True))
+
+
+def _normalize_bulk_value(value) -> dict:
+    """Bulk JSON values can be a bare name string (legacy) or a dict
+    with name/location/timezone. Normalize to a dict shape so the
+    caller can unpack uniformly."""
+    if value is None:
+        return {"name": None}
+    if isinstance(value, str):
+        return {"name": value}
+    if isinstance(value, dict):
+        return {
+            "name": value.get("name"),
+            "location": value.get("location"),
+            "timezone": value.get("timezone"),
+        }
+    raise ValueError(f"unsupported bulk value type: {type(value).__name__}")
 
 
 def main() -> None:
@@ -97,11 +163,16 @@ def main() -> None:
     p.add_argument("--source", default="glean", help="Provenance tag stored in entry.sources")
     sub = p.add_subparsers(dest="mode", required=True)
 
-    sp_single = sub.add_parser("single", help="Record one email→name pair")
+    sp_single = sub.add_parser("single", help="Record one email→person record")
     sp_single.add_argument("--email", required=True)
-    sp_single.add_argument("--name", required=True)
+    sp_single.add_argument("--name", default=None,
+                           help="Display name. Omit to update only location/timezone.")
+    sp_single.add_argument("--location", default=None,
+                           help="Raw Glean location string, e.g. 'GB Remote United Kingdom'.")
+    sp_single.add_argument("--timezone", default=None,
+                           help="IANA timezone (e.g. 'Europe/London'). Overrides inference from --location.")
 
-    sub.add_parser("bulk", help="Read JSON object {email: name} from stdin")
+    sub.add_parser("bulk", help="Read JSON object {email: name|record} from stdin")
 
     args = p.parse_args()
     fetched_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -110,8 +181,14 @@ def main() -> None:
     updated = 0
     total = 0
     if args.mode == "single":
+        if not (args.name or args.location or args.timezone):
+            sys.exit("record_person_name: single mode requires at least one of --name, --location, --timezone")
         total = 1
-        if merge_name(data, args.email, args.name, source=args.source, fetched_at=fetched_at):
+        if merge_person(
+            data, args.email, args.name,
+            location=args.location, timezone=args.timezone,
+            source=args.source, fetched_at=fetched_at,
+        ):
             updated += 1
     else:
         try:
@@ -119,10 +196,19 @@ def main() -> None:
         except json.JSONDecodeError as e:
             sys.exit(f"record_person_name: malformed JSON on stdin ({e})")
         if not isinstance(payload, dict):
-            sys.exit("record_person_name: stdin JSON must be an object {email: name}")
-        for email, name in payload.items():
+            sys.exit("record_person_name: stdin JSON must be an object {email: name|record}")
+        for email, value in payload.items():
             total += 1
-            if merge_name(data, email, name, source=args.source, fetched_at=fetched_at):
+            try:
+                fields = _normalize_bulk_value(value)
+            except ValueError as e:
+                sys.exit(f"record_person_name: bad entry for {email!r}: {e}")
+            if merge_person(
+                data, email, fields.get("name"),
+                location=fields.get("location"),
+                timezone=fields.get("timezone"),
+                source=args.source, fetched_at=fetched_at,
+            ):
                 updated += 1
 
     save(args.path, data)

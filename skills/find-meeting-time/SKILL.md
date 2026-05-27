@@ -42,6 +42,7 @@ Resolve the inputs into a concrete plan:
 - **Duration**: default 30 min if not specified.
 - **Date range**: convert relative phrases to absolute dates using today's date from the system context. **Always pass `--start >= now`**: never query for slots in the past. If the user says "this week" and it's already mid-afternoon Friday, snap `--start` to the next business-day morning rather than rewinding to Monday. **Never propose a slot whose start time has already passed** at the time of response. Default to the next 5 business days if unspecified.
 - **Working hours**: default to 9:00–17:00 local. If multiple timezones are at play, prefer overlap windows and call out the timezone math in the final answer.
+- **Attendee timezones**: Calendar freebusy data doesn't reliably surface per-attendee TZ. Before proposing slots, check the `timezone` field for each attendee in `people.yaml` (see the resolution-order section below). If any attendee is missing a TZ, look up their Glean `location` and record it via `record_person_name.py --location <Glean-string>` — the TZ is inferred via `timezone_map.py`. When TZs differ, flag the math inline in the rendered answer (e.g., "3:30 PM PT = 11:30 PM UK") so the user doesn't have to convert.
 
 If the description is too ambiguous to act on (no attendees, or a window that's clearly nonsensical), ask **one** clarifying question, then proceed.
 
@@ -171,18 +172,31 @@ for entries they want pinned.
 
 ## Booking the chosen slot
 
-After the user explicitly says "book it" / "schedule it" / "create the event" / "send the invite" (or equivalent), materialize the slot as a real Calendar event. Two execution paths exist, mirroring find-meeting-time's API-vs-browser split — kept separate so each can evolve independently:
+After the user explicitly says "book it" / "schedule it" / "create the event" / "send the invite" (or equivalent), materialize the slot as a real Calendar event.
 
-- **API path** — `create_event.py`. Fast and structured. Attaches a hand-crafted Zoom URL (your personal room or a pool rotation) or a Meet link. **Does NOT trigger the real Zoom Workspace add-on**: Google's public Calendar API doesn't expose that dispatch (see SETUP.md).
-- **Hybrid path (Plan B)** — API creates the event with no conferencing (fast, returns event_id), then Playwright opens that event in the editor and clicks the Zoom add-on (3 clicks). API re-queries afterwards to capture the attached conferenceData. ~5s of Playwright on top of the API path.
+### Default: hybrid path with fresh Zoom add-on
 
-**The API path is the default.** It's faster, structured, and doesn't depend on browser session state. Use it for: internal 1:1 or small-team sync where the personal room is fine; back-to-back parallel meetings (`--conference zoom-pool`); explicit Google Meet preference (`--conference meet`); in-person/holds (`--conference none`).
+**For any meeting that needs a video call, attach Zoom via the hybrid path.** This is the *default*, not a special-case. Every booked event gets a unique, real-Zoom-add-on URL — matching how the user books manually. Don't reach for `--conference zoom` (personal room), `--conference zoom-pool`, or anything else unless the user explicitly asks.
 
-**Use the hybrid path only when the API path can't satisfy the requirement.** Triggers: external attendees (customers, candidates, vendors) where the personal room reads informal; user explicitly says "use the real Zoom" / "trigger the add-on" / "real Zoom dispatch"; audit/compliance need for a fresh unique Zoom meeting per event.
+**NEVER attach Google Meet.** Not as a default, not as a fallback when Zoom can't be attached, not as a "good enough" substitute. `--conference meet` exists in `create_event.py` for legacy callers but must not be invoked from this skill. If Zoom can't go on the event for any reason — Playwright MCP not connected, Google SSO stale, Zoom add-on missing from the menu, dispatch hangs, Save warns — **stop and tell the user what's wrong.** Do not silently swap conferencing vendors.
 
-When ambiguous, ask once. Otherwise, default to API path.
+**When Playwright MCP isn't connected** (no `browser_*` tools in your tool list), the hybrid path can't run. Don't proceed by falling back to Meet. Instead, surface the situation:
 
-**Rules of engagement (both paths):**
+> "Playwright MCP isn't connected in this session — run `/mcp` to bring it up, or I can create the bare event now and you'd need to attach Zoom yourself in the Calendar UI (~2 clicks)."
+
+Wait for direction before doing anything that touches attendees' calendars.
+
+### When to use the API path directly
+
+`create_event.py` alone (no Playwright follow-up) is reserved for **explicit non-Zoom-add-on cases the user has stated**:
+
+- In-person event, hold, or focus block → `--conference none`.
+- User explicitly says "use my personal Zoom" → `--conference zoom` (requires `zoom_personal_meeting_url` in config).
+- User explicitly says "rotate through the zoom pool" → `--conference zoom-pool`.
+
+Anything else routes to the hybrid path.
+
+### Rules of engagement (both paths)
 
 - **Confirm before sending invites to others.** Picking a slot in chat ("Mon 1:30 works") is not the same as authorizing invites to go out. If the user hasn't used an explicit booking verb, propose what you'd send (summary, attendees, conference type) and wait for a "yes". Once they say "book it" with an explicit verb, you have consent for that single event — don't keep booking subsequent events implicitly.
 - **Use a summary that reads well in invitees' inboxes.** Not "[Meeting]" or "Quick chat" — be specific: "AI tooling sync — you + eve", "Hiring debrief: <candidate>". Pull from the conversation context.
@@ -190,7 +204,9 @@ When ambiguous, ask once. Otherwise, default to API path.
 - **Echo the result** with the event's HTML link (click-to-edit) and the conference join URL.
 - **Don't auto-log this as an outcome** — `record_outcome.py` is for tracking ask-to-move outcomes, not event creation.
 
-### API path
+### API path (explicit non-Zoom-add-on cases only)
+
+Only reach for this when the user has named one of the cases in **"When to use the API path directly"** above. For any video meeting where the user hasn't named a specific conferencing kind, use the hybrid path instead.
 
 ```bash
 uv run --script "$(dirname "$0")/create_event.py" \
@@ -198,20 +214,20 @@ uv run --script "$(dirname "$0")/create_event.py" \
   --end   <slot end ISO 8601 with offset> \
   --summary "<event title — usually derived from the meeting purpose>" \
   --attendees <comma-separated required-attendee emails> \
-  [--conference zoom|zoom-pool|meet|none]   # default from config.yaml
+  [--conference zoom|zoom-pool|none]        # do NOT use 'meet'
   [--zoom-url <ad-hoc Zoom URL>]            # override personal/pool
   [--description "<context>"]
   [--dry-run]                                # preview body without calling API
 ```
 
 **Conference choice:**
-- Default: `--conference` from `config.yaml` (typically `zoom`, meaning the personal meeting room).
-- **`zoom-pool`**: back-to-back meetings or parallel calls. Deterministically rotates through `zoom_fallback_rooms`.
-- **`meet`**: when the user prefers Google Meet.
-- **`none`**: in-person events, holds, focus blocks.
-- **`--zoom-url`**: ad-hoc override for a specific provided URL.
+- **`none`**: in-person events, holds, focus blocks. The common reason to use this script directly.
+- **`zoom`**: only when the user explicitly asked for their personal Zoom room. Requires `zoom_personal_meeting_url` in config; if it's missing, **don't fall back to Meet** — surface the gap and route to the hybrid path (which gets fresh Zoom without needing personal URL config).
+- **`zoom-pool`**: only when the user explicitly named the static-pool rotation (typical reason: back-to-back / parallel calls).
+- **`meet`**: **never used from this skill.** The CLI option exists for legacy callers; do not invoke it as a default, a fallback, or a substitute.
+- **`--zoom-url`**: ad-hoc override only when the user provides a specific URL.
 
-If `conference_status` in the response flags an issue (missing join URL when one was expected), retry once with `--conference meet` and call out the swap, or surface the bare event link and let the user fix conferencing manually.
+If `conference_status` in the response flags an issue (missing join URL when one was expected), **do not retry with `--conference meet`**. Surface the failure, explain what's broken, and either route to the hybrid path (for a fresh Zoom add-on URL) or let the user fix conferencing manually.
 
 The first run after upgrading from a read-only `freebusy.py` will pop a browser for the broader write scope (the auth path's scope-mismatch detector handles it). User clicks through once; new token caches separately at `~/.config/ai-seal-tools/credentials/google_calendar_write_token.json`.
 
@@ -259,9 +275,10 @@ Follows the snapshot-driven / vision-fallback discipline in `prompts/browsing.md
 7. **Echo the result** to the user. If `conference_status` shows "no conference entry points attached" the Playwright click silently failed — tell the user the event exists but conferencing didn't attach; they can fix it in their own Calendar tab.
 
 **Failure modes specific to this path:**
+- **Playwright MCP not connected (no `browser_*` tools in tool list)** → can't run the path at all. **Do not fall back to `--conference meet`.** Stop before any API call and ask the user to either run `/mcp` to bring up Playwright, or to attach Zoom themselves in the Calendar UI after you create the bare event.
 - **Step 2 redirects to sign-in** → drive interactive sign-in (sub-bullets above), then retry.
-- **Step 4: "Zoom Meeting" missing from menu** → add-on not installed. Event already exists; surface and leave alone.
-- **Step 4: dispatch hangs >15s** → screenshot, report. The Zoom Apps Script deployment may be transiently slow.
+- **Step 4: "Zoom Meeting" missing from menu** → add-on not installed. Event already exists; surface and leave alone (do NOT swap to Meet).
+- **Step 4: dispatch hangs >15s** → screenshot, report. The Zoom Apps Script deployment may be transiently slow. Don't substitute Meet.
 - **Step 5: Save fails with overlap warning** → conflict probe in `freebusy.py` may have had stale data; the event was never created, so re-run from step 1 with a new slot.
 - **Step 6: get_event returns no conferenceData** → Playwright click landed but Save didn't commit it (rare; usually a network blip). The event exists titled/timed correctly; tell the user and let them retry the attach manually.
 
@@ -417,7 +434,7 @@ The context band defaults to ±2 hours with 30-min ticks. The slot itself is mar
        if name: print(f'{e}={name}')
    "
    ```
-2. **Glean lookup** for any attendee not in the cache (or whose cache entry has `name: null`). Use `mcp__glean__chat` with a `What is X's Confluent email?`-style prompt, or `mcp__glean__search` with `app=people`. After resolving, persist via `record_person_name.py --source glean single --email <e> --name <n>` so the next call hits the cache.
+2. **Glean lookup** for any attendee not in the cache (or whose cache entry has `name: null` / no `timezone`). Use `mcp__glean__chat` with a `What is X's Confluent email?`-style prompt, or `mcp__glean__search` with `app=people`. Extract both `name` and `location` (e.g., `GB Remote United Kingdom`) from the result. After resolving, persist via `record_person_name.py --source glean single --email <e> --name <n> --location "<loc>"` so the next call hits the cache. Timezone is inferred from `location` automatically; pass `--timezone <IANA>` only to override the inference (e.g., `US Remote Washington` → defaults to PT but person is actually in DC).
 3. **Email local-part fallback** for anything still unresolved — the renderer does this automatically when a name is missing from the `--names` map.
 
 The cache file is gitignored and Drive-backed. Maintain it with:
@@ -426,10 +443,14 @@ The cache file is gitignored and Drive-backed. Maintain it with:
 # Top up after meetings happen (idempotent; safe to re-run):
 uv run --script scan_recent_attendees.py [--since-days 30 --max-attendees 5]
 
-# Fill in names that Calendar's displayName didn't surface, after a
-# Glean lookup. Single or bulk-from-stdin:
-record_person_name.py --source glean single --email <e> --name "<n>"
-echo '{"e1": "N1", "e2": "N2"}' | record_person_name.py --source glean bulk
+# Fill in names + locations that Calendar's displayName / freebusy
+# didn't surface, after a Glean lookup. Single or bulk-from-stdin:
+record_person_name.py --source glean single \
+    --email <e> --name "<n>" --location "<Glean-location-string>"
+# Bulk accepts either {"email": "name"} (legacy) or
+# {"email": {"name": "...", "location": "...", "timezone": "..."}}:
+echo '{"e1": {"name": "N1", "location": "GB Remote United Kingdom"}}' \
+    | record_person_name.py --source glean bulk
 ```
 
 Then pass the resolved mapping to the renderer: `"email1=First Last,email2=First Last,…"`. The renderer falls back to email local-part for any unmapped entries — no display crash, just less readable.

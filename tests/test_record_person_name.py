@@ -127,6 +127,97 @@ def test_merge_skips_blank_email():
 
 
 # ---------------------------------------------------------------------------
+# merge_person — location / timezone
+# ---------------------------------------------------------------------------
+
+
+def test_merge_person_stores_location_and_infers_tz():
+    """Location alone is enough — timezone falls out of the location map."""
+    data: dict = {"people": {}}
+    changed = rpn.merge_person(
+        data, "alice@example.com", "Alice",
+        location="GB Remote United Kingdom",
+        source="glean", fetched_at="2026-05-27T00:00:00+00:00",
+    )
+    assert changed is True
+    entry = data["people"]["alice@example.com"]
+    assert entry["location"] == "GB Remote United Kingdom"
+    assert entry["timezone"] == "Europe/London"
+
+
+def test_merge_person_explicit_tz_overrides_inference():
+    """When the caller passes a timezone, that beats whatever the map
+    would have inferred from the location string."""
+    data: dict = {"people": {}}
+    rpn.merge_person(
+        data, "alice@example.com", "Alice",
+        location="US Remote Washington",  # would infer PT
+        timezone="America/New_York",      # caller says DC
+        source="glean", fetched_at="2026-05-27T00:00:00+00:00",
+    )
+    assert data["people"]["alice@example.com"]["timezone"] == "America/New_York"
+
+
+def test_merge_person_tz_only_without_location():
+    """Skill might know the TZ from a non-Glean source and want to
+    record it without a `location` string."""
+    data: dict = {"people": {}}
+    rpn.merge_person(
+        data, "alice@example.com", "Alice",
+        timezone="Europe/Berlin",
+        source="manual", fetched_at="2026-05-27T00:00:00+00:00",
+    )
+    entry = data["people"]["alice@example.com"]
+    assert entry["timezone"] == "Europe/Berlin"
+    assert "location" not in entry
+
+
+def test_merge_person_location_only_when_name_already_cached():
+    """Common path: Claude already cached the name, now backfilling TZ.
+    Name passing as None mustn't clobber the existing one."""
+    data: dict = {"people": {"alice@example.com": {"name": "Alice", "sources": ["glean"]}}}
+    rpn.merge_person(
+        data, "alice@example.com", None,
+        location="US Remote California",
+        source="glean", fetched_at="2026-05-27T00:00:00+00:00",
+    )
+    entry = data["people"]["alice@example.com"]
+    assert entry["name"] == "Alice"
+    assert entry["location"] == "US Remote California"
+    assert entry["timezone"] == "America/Los_Angeles"
+
+
+def test_merge_person_ambiguous_location_records_location_but_not_tz():
+    """A US/CA location with no state/province is recorded as the raw
+    string but produces no TZ entry — the user can fix manually."""
+    data: dict = {"people": {}}
+    rpn.merge_person(
+        data, "alice@example.com", "Alice",
+        location="US Remote Foo",
+        source="glean", fetched_at="2026-05-27T00:00:00+00:00",
+    )
+    entry = data["people"]["alice@example.com"]
+    assert entry["location"] == "US Remote Foo"
+    assert "timezone" not in entry
+
+
+def test_merge_person_idempotent_on_replay():
+    """Replaying the same Glean payload produces no change the second time."""
+    data: dict = {"people": {}}
+    rpn.merge_person(
+        data, "alice@example.com", "Alice",
+        location="GB Remote United Kingdom",
+        source="glean", fetched_at="2026-05-27T00:00:00+00:00",
+    )
+    changed = rpn.merge_person(
+        data, "alice@example.com", "Alice",
+        location="GB Remote United Kingdom",
+        source="glean", fetched_at="2026-05-28T00:00:00+00:00",
+    )
+    assert changed is False
+
+
+# ---------------------------------------------------------------------------
 # CLI smoke tests
 # ---------------------------------------------------------------------------
 
@@ -190,3 +281,83 @@ def test_cli_bulk_mode_rejects_non_object_stdin(tmp_path):
     )
     assert res.returncode != 0
     assert "object" in res.stderr.lower() or "{email" in res.stderr
+
+
+# ---------------------------------------------------------------------------
+# CLI smoke tests for the new location/timezone flow
+# ---------------------------------------------------------------------------
+
+
+def test_cli_single_mode_with_location_infers_tz(tmp_path):
+    p = tmp_path / "people.yaml"
+    res = subprocess.run(
+        [sys.executable, str(SCRIPT), "--path", str(p),
+         "single", "--email", "jp@example.com",
+         "--name", "JP Example",
+         "--location", "GB Remote United Kingdom"],
+        capture_output=True, text=True,
+        env={"UV_NO_CONFIG": "1", "PATH": __import__("os").environ.get("PATH", "")},
+    )
+    assert res.returncode == 0, res.stderr
+    entry = yaml.safe_load(p.read_text())["people"]["jp@example.com"]
+    assert entry["name"] == "JP Example"
+    assert entry["location"] == "GB Remote United Kingdom"
+    assert entry["timezone"] == "Europe/London"
+
+
+def test_cli_single_mode_explicit_timezone_wins(tmp_path):
+    p = tmp_path / "people.yaml"
+    res = subprocess.run(
+        [sys.executable, str(SCRIPT), "--path", str(p),
+         "single", "--email", "alice@example.com",
+         "--name", "Alice",
+         "--location", "US Remote Washington",
+         "--timezone", "America/New_York"],
+        capture_output=True, text=True,
+        env={"UV_NO_CONFIG": "1", "PATH": __import__("os").environ.get("PATH", "")},
+    )
+    assert res.returncode == 0, res.stderr
+    entry = yaml.safe_load(p.read_text())["people"]["alice@example.com"]
+    assert entry["timezone"] == "America/New_York"
+
+
+def test_cli_single_requires_at_least_one_field(tmp_path):
+    """Without --name, --location, or --timezone there's nothing to write."""
+    p = tmp_path / "people.yaml"
+    res = subprocess.run(
+        [sys.executable, str(SCRIPT), "--path", str(p),
+         "single", "--email", "alice@example.com"],
+        capture_output=True, text=True,
+        env={"UV_NO_CONFIG": "1", "PATH": __import__("os").environ.get("PATH", "")},
+    )
+    assert res.returncode != 0
+    assert "name" in res.stderr or "location" in res.stderr
+
+
+def test_cli_bulk_mode_mixed_legacy_and_rich_shapes(tmp_path):
+    """Backward-compat: old name-only string values still work; new
+    dict-shaped values can coexist in the same payload."""
+    p = tmp_path / "people.yaml"
+    payload = {
+        "alice@example.com": "Alice Example",  # legacy name-only
+        "bob@example.com": {                    # rich record
+            "name": "Bob Example",
+            "location": "US Remote Colorado",
+        },
+        "carol@example.com": {                  # tz-only, no location
+            "timezone": "Europe/Paris",
+        },
+    }
+    res = subprocess.run(
+        [sys.executable, str(SCRIPT), "--path", str(p), "bulk"],
+        input=json.dumps(payload),
+        capture_output=True, text=True,
+        env={"UV_NO_CONFIG": "1", "PATH": __import__("os").environ.get("PATH", "")},
+    )
+    assert res.returncode == 0, res.stderr
+    on_disk = yaml.safe_load(p.read_text())["people"]
+    assert on_disk["alice@example.com"]["name"] == "Alice Example"
+    assert "location" not in on_disk["alice@example.com"]
+    assert on_disk["bob@example.com"]["location"] == "US Remote Colorado"
+    assert on_disk["bob@example.com"]["timezone"] == "America/Denver"
+    assert on_disk["carol@example.com"]["timezone"] == "Europe/Paris"
