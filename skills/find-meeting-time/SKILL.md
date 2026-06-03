@@ -385,6 +385,15 @@ These are heuristics. The user's judgment overrides — if Alice's "1:1" is with
 
 **Always render each top slot via `render_slot.py`** — it produces a consistent header + ASCII timeline that shows the layout of conflicts across all attendees. Don't hand-format slot cards; the renderer's contract is what tests lock in.
 
+**This is a hard requirement, not a default.** Every user-facing answer that proposes one or more times (or argues no time is workable) MUST include the rendered slot cards. There are no exceptions:
+
+- **Don't skip when all scores are 0 / no viable slot.** The timeline visualization is *exactly* what makes structural patterns (offsite blocks spanning all attendees, OOO walls, opaque columns) legible at a glance. A textual table can hide that.
+- **Don't skip on "obvious" answers** (e.g., one clean slot, one attendee). The slot card + "Your day" band carry surrounding-context information (adjacent meetings, back-to-back risk, lunch overlap) that flat text doesn't.
+- **Don't skip on probes / "let me just check Friday too" turns.** If you call `freebusy.py`, you also call `render_slot.py`. A summary table for follow-up questions is fine *in addition to* the slot cards, not in place of them.
+- **Don't skip the augmentation step.** Always splice `context_events` (via `events_around.py`) into the slot dict *before* rendering, so each card includes the requester's ±2h "Your day" band with the slot marker and adjacent events. The surrounding context is half the value — without it, the reader can't see whether the proposed slot is back-to-back with something heavy.
+
+A final answer that proposes times without rendered slot cards is incomplete and should be revised before sending.
+
 ```bash
 # 1. Save freebusy output to a temp file.
 TMP=$(mktemp); ...freebusy.py ... > $TMP
