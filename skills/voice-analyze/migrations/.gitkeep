@@ -1,0 +1,4 @@
+# Migration files live here as schema versions accumulate.
+# Each file is named <kind>_v<N>_to_v<N+1>.py and exposes a
+# `migrate(data: dict) -> dict` function. Discovered by filename at runtime
+# (see schema.py::_load_migration). No __init__.py needed.

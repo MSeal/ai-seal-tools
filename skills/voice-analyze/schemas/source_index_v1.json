@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-seal-tools/voice/source_index/v1",
+  "title": "Voice Source Index v1",
+  "description": "Discovery queue for documents that could be analyzed by /voice-analyze. Tracks Glean/Confluence/GitHub/local sources with proposed audience+doc_type categorization, dedup keys, and links back to sources_seen.yaml (via source_hash) once analyzed. Lives at ~/.config/ai-seal-tools/voice/source_index.yaml (Drive-backed). Unlike sources_seen.yaml — which never stores titles or content — the index DOES store titles + URLs because it's the user-facing discovery layer and lives in their personal Drive, not in any tracked repo.",
+  "type": "object",
+  "required": ["schema_version", "sources"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "last_updated": { "type": "string", "format": "date-time" },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source_entry" }
+    }
+  },
+  "$defs": {
+    "source_entry": {
+      "type": "object",
+      "required": ["id", "location", "title", "discovered_at", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable per-entry id. Format: <location>_<short-hash>. Used for cross-referencing across runs.",
+          "pattern": "^[a-z][a-z0-9_]+_[a-z0-9]{8,16}$"
+        },
+        "location": {
+          "enum": [
+            "local",
+            "confluence",
+            "gdrive_doc",
+            "gdrive_slides",
+            "gdrive_sheets",
+            "gdrive_other",
+            "github",
+            "jira",
+            "glean_slack",
+            "glean_gmail",
+            "other"
+          ],
+          "description": "Where the source lives. Determines how to fetch its content for analysis."
+        },
+        "url": {
+          "type": "string",
+          "description": "Canonical URL for non-local sources. Used as the dedup key."
+        },
+        "path": {
+          "type": "string",
+          "description": "Filesystem path for local sources. Used as the dedup key when no url is set."
+        },
+        "title": { "type": "string" },
+        "space": {
+          "type": "string",
+          "description": "Confluence space key, Drive folder name, GitHub repo, etc. Optional context for categorization."
+        },
+        "discovered_at": { "type": "string", "format": "date-time" },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last-modified timestamp from the source system, if known."
+        },
+        "word_count": { "type": "integer", "minimum": 0 },
+        "contribution_type": {
+          "enum": ["authored", "contributed", "unknown"],
+          "description": "How this user is associated with the doc. 'authored' = they created it; 'contributed' = they updated/commented but did not author; 'unknown' = discovered without authorship signal. Contributed docs may or may not contain substantive prose from the user — manual review decides whether they're voice-corpus-worthy."
+        },
+        "proposed_audience": {
+          "type": "string",
+          "description": "Audience tag from the audience_registry. May come from heuristic or classifier; see audience_source."
+        },
+        "audience_source": {
+          "enum": ["heuristic", "classifier", "manual"],
+          "description": "How proposed_audience was assigned."
+        },
+        "audience_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence in proposed_audience. Heuristic categorizer reports its rule confidence; classifier reports its self-reported confidence; manual is always 1.0."
+        },
+        "audience_alternates": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Other plausible audience tags, from classifier or heuristic ambiguity."
+        },
+        "proposed_doc_type": { "enum": ["polished", "draft", "outline"] },
+        "doc_type_source": { "enum": ["heuristic", "classifier", "manual"] },
+        "doc_type_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "status": {
+          "enum": ["queued", "analyzed", "skipped", "fetched"],
+          "description": "Lifecycle: queued (in index, not fetched) → fetched (content pulled, not yet analyzed) → analyzed (propose ran) | skipped (excluded by user)."
+        },
+        "source_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 of normalized content. Set after analysis; links to sources_seen.yaml."
+        },
+        "proposal_id": {
+          "type": "string",
+          "description": "ID of the most recent proposal generated for this source."
+        },
+        "skip_reason": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

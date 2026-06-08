@@ -1,0 +1,58 @@
+# Symlinks created by utils/install_skills.py at install time.
+#
+# Voice-profile state lives under ~/.config/ai-seal-tools/voice/ (not
+# /voice-analyze/) because all three planned skills — voice-analyze,
+# voice-review, voice-write — read and write the same files. Drive-backed
+# so the profile and source-hash log survive across machines without the
+# seed documents needing to follow.
+#
+# STORAGE ZONES (each entry below is one of):
+#   [drive-personal] — synced to personal Drive across your machines.
+#                       Contains only abstracted profile data, hashes, or
+#                       your own discovery titles. NEVER source prose.
+#   [machine-local]  — gitignored AND not synced. Contains raw seed
+#                       material or ephemeral pre-review state.
+#
+# proposals/ and ~/.cache/.../content/ are deliberately NOT listed here
+# (both are [machine-local]):
+#   - proposals/ is pre-review ephemeral state; syncing across machines
+#     would create accept/reject drift.
+#   - content/ holds fetched seed bodies (real prose, third-party names);
+#     it's a fetch cache, not corpus state, and stays local by design.
+
+# [drive-personal] Live voice profile. Paraphrased descriptors + synthetic
+# exemplars + per-audience aggregate stats. Zero source content.
+- target: ~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/My Drive/ai-seal-tools/voice/profile.yaml
+  symlinks:
+    - ~/.config/ai-seal-tools/voice/profile.yaml
+    - config.local/voice/profile.yaml
+  template_if_missing: templates/profile.yaml
+
+# [drive-personal] Hash-keyed log of analyzed sources. SHA-256 hashes only,
+# no titles or content. Used to dedup re-analysis and link exemplars back
+# to their originating source.
+- target: ~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/My Drive/ai-seal-tools/voice/sources_seen.yaml
+  symlinks:
+    - ~/.config/ai-seal-tools/voice/sources_seen.yaml
+    - config.local/voice/sources_seen.yaml
+  template_if_missing: templates/sources_seen.yaml
+
+# [drive-personal] Discovery queue — YOUR navigation layer over candidate
+# seed documents. Stores titles + URLs + audience/doc_type guesses so you
+# can pick what to analyze. Titles + URLs are OK here because this is
+# personal Drive only; they never propagate into the profile.
+- target: ~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/My Drive/ai-seal-tools/voice/source_index.yaml
+  symlinks:
+    - ~/.config/ai-seal-tools/voice/source_index.yaml
+    - config.local/voice/source_index.yaml
+  template_if_missing: templates/source_index.yaml
+
+# [drive-personal] Scrub feedback log — accumulated user overrides on
+# flagged exemplars with reason categories + notes. Drives periodic scrub
+# rule improvements. Contains short text windows around flagged words; no
+# source document content.
+- target: ~/Library/CloudStorage/GoogleDrive-mseal@confluent.io/My Drive/ai-seal-tools/voice/scrub_feedback.yaml
+  symlinks:
+    - ~/.config/ai-seal-tools/voice/scrub_feedback.yaml
+    - config.local/voice/scrub_feedback.yaml
+  template_if_missing: templates/scrub_feedback.yaml

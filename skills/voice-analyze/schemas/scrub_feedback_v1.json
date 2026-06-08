@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-seal-tools/voice/scrub_feedback/v1",
+  "title": "Scrub Feedback v1",
+  "description": "Accumulated user feedback on scrub-flagged exemplars. Each entry records why the user overrode a default reject (false positive category + notes) or explicitly accepted-despite-flag. The log is the input to periodic scrub-rule improvement passes: patterns in the reason+snippet pairs drive allowlist additions, regex tweaks, and prompt-anti-leak updates.",
+  "type": "object",
+  "required": ["schema_version", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "last_updated": { "type": "string", "format": "date-time" },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": [
+        "logged_at",
+        "proposal_id",
+        "exemplar_id",
+        "flag_rule",
+        "flag_snippet",
+        "decision",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "logged_at": { "type": "string", "format": "date-time" },
+        "proposal_id": { "type": "string" },
+        "exemplar_id": { "type": "string", "pattern": "^ex_[a-z0-9_]+$" },
+        "source_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "flag_rule": { "type": "string" },
+        "flag_snippet": { "type": "string" },
+        "flag_detail": { "type": "string" },
+        "field": {
+          "type": "string",
+          "description": "Which exemplar field the flag came from (synthetic | pattern | when_to_use)"
+        },
+        "surrounding_text": {
+          "type": "string",
+          "description": "Short window of text around the flag (~50 chars either side). Helps future rule-tuning see structural context."
+        },
+        "decision": { "enum": ["accept", "reject"] },
+        "reason": {
+          "enum": [
+            "false_positive:emphasis",
+            "false_positive:common_word",
+            "false_positive:section_label",
+            "false_positive:placeholder",
+            "false_positive:other",
+            "true_positive:override",
+            "no_reason"
+          ]
+        },
+        "reason_notes": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-seal-tools/voice/profile/v1",
+  "title": "Voice Profile v1",
+  "description": "Per-audience, per-doc-type voice analysis. No source text, titles, or third-party names are ever stored here; exemplars are fully synthetic and human-reviewed before entry.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "last_updated",
+    "audience_registry",
+    "audiences",
+    "shared_anti_patterns",
+    "merge_history"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "last_updated": { "type": "string", "format": "date-time" },
+    "audience_registry": {
+      "type": "object",
+      "description": "Map of audience-tag -> human description. Defines the valid set of audience keys.",
+      "additionalProperties": { "type": "string" }
+    },
+    "audiences": {
+      "type": "object",
+      "description": "Per-audience voice data. Keys SHOULD all appear in audience_registry (cross-file check enforced by schema.py at write time, not by JSON Schema).",
+      "additionalProperties": { "$ref": "#/$defs/audience" }
+    },
+    "shared_anti_patterns": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/anti_pattern" }
+    },
+    "merge_history": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/merge_history_entry" }
+    }
+  },
+  "$defs": {
+    "audience": {
+      "type": "object",
+      "required": ["description", "sources_count", "axis_baseline", "types"],
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "sources_count": { "type": "integer", "minimum": 0 },
+        "axis_baseline": { "$ref": "#/$defs/axis_values" },
+        "types": {
+          "type": "object",
+          "description": "Per-doc-type sub-profile. Keys must be from the doc_type enum.",
+          "propertyNames": { "enum": ["polished", "draft", "outline"] },
+          "additionalProperties": { "$ref": "#/$defs/type_bucket" }
+        }
+      }
+    },
+    "axis_values": {
+      "type": "object",
+      "required": ["formality", "technical_density", "brevity", "warmth"],
+      "additionalProperties": false,
+      "properties": {
+        "formality": { "type": "number", "minimum": 0, "maximum": 1 },
+        "technical_density": { "type": "number", "minimum": 0, "maximum": 1 },
+        "brevity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "warmth": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "type_bucket": {
+      "type": "object",
+      "required": ["sources_count", "stats", "descriptors", "exemplars"],
+      "additionalProperties": false,
+      "properties": {
+        "sources_count": { "type": "integer", "minimum": 0 },
+        "stats": { "$ref": "#/$defs/stats" },
+        "descriptors": { "$ref": "#/$defs/descriptors" },
+        "exemplars": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/exemplar" }
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sentence_length": { "$ref": "#/$defs/distribution_stats" },
+        "paragraph_length_sentences": { "$ref": "#/$defs/distribution_stats" },
+        "function_words_per_100w": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0 }
+        },
+        "pronoun_ratios": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0 }
+        },
+        "punctuation_per_100w": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0 }
+        },
+        "hedge_per_100w": { "type": "number", "minimum": 0 },
+        "booster_per_100w": { "type": "number", "minimum": 0 },
+        "stance_per_100w": { "type": "number", "minimum": 0 },
+        "engagement_per_100w": { "type": "number", "minimum": 0 },
+        "contraction_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "passive_voice_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bullet_density": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Fraction of lines that are bullets. Useful signal for distinguishing outline from polished."
+        },
+        "lexical_diversity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mtld": { "type": "number", "minimum": 0 },
+            "moving_ttr": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "lexical_complexity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "avg_word_length_chars": { "type": "number", "minimum": 0 },
+            "avg_word_syllables": { "type": "number", "minimum": 0 },
+            "pct_long_words": { "type": "number", "minimum": 0, "maximum": 1 },
+            "dale_chall_simple_pct": { "type": "number", "minimum": 0, "maximum": 1 },
+            "latinate_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+            "concreteness_score": { "type": "number", "minimum": 1, "maximum": 5 }
+          }
+        },
+        "readability": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fk_grade": { "type": "number" },
+            "coleman_liau": { "type": "number" },
+            "gunning_fog": { "type": "number" }
+          }
+        },
+        "sentence_opener_pos_dist": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "connective_prefs": {
+          "type": "object",
+          "propertyNames": { "enum": ["contrast", "additive", "causal", "temporal"] },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    },
+    "distribution_stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mean": { "type": "number" },
+        "median": { "type": "number" },
+        "p10": { "type": "number" },
+        "p90": { "type": "number" },
+        "std": { "type": "number" },
+        "lag1_autocorr": { "type": "number" }
+      }
+    },
+    "descriptors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "voice_summary": { "type": "string" },
+        "rhetorical_moves": { "type": "array", "items": { "type": "string" } },
+        "tics": { "type": "array", "items": { "type": "string" } },
+        "structural_habits": { "type": "array", "items": { "type": "string" } },
+        "openings_inventory": { "type": "array", "items": { "type": "string" } },
+        "closings_inventory": { "type": "array", "items": { "type": "string" } },
+        "transition_style": { "type": "string" },
+        "humor_register": { "type": "string" },
+        "self_reference_behavior": { "type": "string" },
+        "what_to_avoid": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "exemplar": {
+      "type": "object",
+      "required": ["id", "source_hash", "pattern", "synthetic", "when_to_use", "reviewed_at"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^ex_[a-z0-9_]+$" },
+        "source_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "pattern": { "type": "string" },
+        "synthetic": { "type": "string" },
+        "when_to_use": { "type": "string" },
+        "reviewed_at": { "type": "string", "format": "date-time" },
+        "reviewer_notes": { "type": "string" }
+      }
+    },
+    "anti_pattern": {
+      "type": "object",
+      "required": ["id", "rule", "derived"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^ap_[a-z0-9_]+$" },
+        "rule": { "type": "string" },
+        "derived": {
+          "type": "boolean",
+          "description": "True if rule's threshold/value is derived from analyzed sources; false if it's a constant injected by the system."
+        },
+        "derived_from_metric": {
+          "type": "string",
+          "description": "If derived=true, the stats path the threshold reflects (e.g. 'punctuation_per_100w.em_dash')."
+        }
+      }
+    },
+    "merge_history_entry": {
+      "type": "object",
+      "required": ["timestamp", "docs_analyzed", "schema_version_at_time"],
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "docs_analyzed": { "type": "integer", "minimum": 0 },
+        "schema_version_at_time": { "type": "integer", "minimum": 1 },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

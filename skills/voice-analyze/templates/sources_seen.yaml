@@ -1,0 +1,4 @@
+# Sources Seen v1 — tracks which documents have been analyzed, by hash only.
+# No titles, paths, content, or third-party identifiers.
+schema_version: 1
+sources: []

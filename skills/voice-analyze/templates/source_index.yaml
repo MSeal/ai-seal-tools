@@ -1,0 +1,20 @@
+# Voice Source Index v1 — discovery queue for documents that could be analyzed.
+#
+# STORAGE ZONE: personal-Drive-synced (via links.yaml). NEVER committed to
+# any repo. Safe to sync across your own machines.
+#
+# CONTAINS: source titles + URLs + audience/doc_type guesses (the user's
+# own SEED discovery layer — the index of what to analyze). Distinct from
+# sources_seen.yaml which only stores hashes of already-analyzed sources.
+#
+# DOES NOT CONTAIN: source document prose. Titles + URLs are kept here
+# because this is YOUR navigation layer for choosing what to analyze;
+# they never propagate into the profile.
+#
+# Entries flow: queued → fetched → analyzed | skipped.
+# After analysis, source_hash + proposal_id link back to sources_seen.yaml
+# and the proposal archive.
+schema_version: 1
+generated_at: "1970-01-01T00:00:00Z"
+last_updated: "1970-01-01T00:00:00Z"
+sources: []

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-seal-tools/voice/sources_seen/v1",
+  "title": "Sources Seen v1",
+  "description": "Per-source-document records (keyed by SHA-256 hash of normalized text) tracking what's been analyzed. Stores no document content, titles, or third-party identifiers.",
+  "type": "object",
+  "required": ["schema_version", "sources"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source_record" }
+    }
+  },
+  "$defs": {
+    "source_record": {
+      "type": "object",
+      "required": [
+        "hash",
+        "analyzed_at",
+        "schema_version_at_time",
+        "audience",
+        "doc_type",
+        "word_count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "analyzed_at": { "type": "string", "format": "date-time" },
+        "schema_version_at_time": { "type": "integer", "minimum": 1 },
+        "audience": {
+          "type": "string",
+          "description": "Audience tag. Must be a key in the profile's audience_registry (cross-file check at write time)."
+        },
+        "doc_type": { "enum": ["polished", "draft", "outline"] },
+        "word_count": { "type": "integer", "minimum": 0 },
+        "axis_estimates": { "$ref": "#/$defs/axis_values" },
+        "contributed_exemplar_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^ex_[a-z0-9_]+$" }
+        },
+        "contributed_descriptor_keys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Dotted paths into descriptors that this source contributed (e.g. 'rhetorical_moves[2]')."
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "axis_values": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "formality": { "type": "number", "minimum": 0, "maximum": 1 },
+        "technical_density": { "type": "number", "minimum": 0, "maximum": 1 },
+        "brevity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "warmth": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

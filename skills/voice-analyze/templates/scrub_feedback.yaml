@@ -1,0 +1,24 @@
+# Scrub Feedback v1 — accumulated user overrides on scrub-flagged exemplars.
+#
+# STORAGE ZONE: personal-Drive-synced (via links.yaml). NEVER committed.
+#
+# CONTAINS: per-override entries with the flag info, the user's decision
+# (accept | reject), and the reason category + free-text notes. The
+# surrounding_text field stores a short window (~50 chars) around the
+# flagged word so a future rule-tuning pass can see the structural context.
+#
+# DOES NOT CONTAIN: source document text. Snippets are placeholder content
+# from synthetic exemplars; the small window is bounded.
+#
+# Reason categories:
+#   false_positive:emphasis      — was bold/italic/header for emphasis
+#   false_positive:common_word   — common English word that should be allowlisted
+#   false_positive:section_label — generic section-header word, not source-specific
+#   false_positive:placeholder   — was a placeholder we asked the LLM to use
+#   false_positive:other         — false positive, see notes
+#   true_positive:override       — real leak but accepted in context
+#   no_reason                    — no category specified (default)
+schema_version: 1
+generated_at: "1970-01-01T00:00:00Z"
+last_updated: "1970-01-01T00:00:00Z"
+entries: []
