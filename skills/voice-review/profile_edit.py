@@ -142,8 +142,11 @@ def update_reviewer_notes(
 
 
 def _append_history(profile: dict, action: str, **payload) -> None:
+    """Append a manual-edit entry to merge_history. Uses the same
+    `timestamp` field name as normal merge entries so the schema
+    validates both kinds uniformly."""
     profile.setdefault("merge_history", []).append({
-        "merged_at": _now(),
+        "timestamp": _now(),
         "action": action,
         **payload,
     })

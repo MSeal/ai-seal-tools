@@ -213,13 +213,21 @@
     },
     "merge_history_entry": {
       "type": "object",
-      "required": ["timestamp", "docs_analyzed", "schema_version_at_time"],
+      "required": ["timestamp"],
       "additionalProperties": false,
       "properties": {
         "timestamp": { "type": "string", "format": "date-time" },
         "docs_analyzed": { "type": "integer", "minimum": 0 },
         "schema_version_at_time": { "type": "integer", "minimum": 1 },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "action": {
+          "type": "string",
+          "description": "Tag for non-merge audit entries (e.g. manual_edit_remove, manual_edit_restore). Absent for normal proposal merges."
+        },
+        "removed_exemplars": { "type": "array", "items": { "type": "string" } },
+        "added_exemplars": { "type": "array", "items": { "type": "string" } },
+        "updated_notes_for": { "type": "array", "items": { "type": "string" } },
+        "substitute": { "type": "boolean" }
       }
     }
   }

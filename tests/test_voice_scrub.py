@@ -26,7 +26,7 @@ def test_email_detected():
 
 
 def test_url_detected():
-    result = scrub("See https://example.com/path for more.")
+    result = scrub("See https://confluent.io/path for more.")
     assert not result.passed
     assert any(f.rule == "identifier:url" for f in result.findings)
 
@@ -313,6 +313,34 @@ def test_real_email_still_flagged():
     result = scrub(candidate)
     email_flags = {f.snippet for f in result.findings if f.rule == "identifier:email"}
     assert "alice@confluent.io" in email_flags
+
+
+def test_fictional_url_domains_not_flagged():
+    """URLs on example.com / internal.wiki / localhost are placeholder
+    domains the descriptor LLM uses to sanitize real URLs — not leaks."""
+    for url in [
+        "https://example.com/changelog",
+        "https://example.org/docs/path",
+        "https://example.net/api/v1",
+        "https://api.example.com/path",
+        "http://examplecorp.com/policy",
+        "https://test.com/page",
+        "https://internal.wiki/tool-a/config",
+        "http://localhost:8080/debug",
+        "http://127.0.0.1/admin",
+    ]:
+        candidate = f"See {url} for details."
+        result = scrub(candidate)
+        url_flags = [f.snippet for f in result.findings if f.rule == "identifier:url"]
+        assert url not in url_flags, f"Fictional URL {url} should not flag; got {url_flags}"
+
+
+def test_real_url_still_flagged():
+    """Real-domain URLs (confluent.io, github.com, etc.) still leak."""
+    for url in ["https://confluent.io/docs/x", "https://github.com/foo/bar"]:
+        result = scrub(f"See {url}")
+        url_flags = {f.snippet for f in result.findings if f.rule == "identifier:url"}
+        assert url in url_flags, f"Real URL {url} must flag; got {url_flags}"
 
 
 def test_handle_regex_doesnt_match_email_domain():

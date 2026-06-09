@@ -54,6 +54,25 @@ _FICTIONAL_EMAIL_DOMAIN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Placeholder URL domains the descriptor LLM uses when following the
+# anti-leak rules — it sanitizes real URLs by swapping the host for one
+# of these. Treating them as leaks would punish the LLM for doing the
+# right thing. Includes RFC 2606 reserved (example.*), localhost, and
+# the `internal.wiki` host the prompt encourages for fictional internal
+# documentation URLs.
+_FICTIONAL_URL_HOST_RE = re.compile(
+    r"^https?://(?:"
+    r"(?:[a-z0-9-]+\.)?example\.(?:com|org|net)"
+    r"|(?:[a-z0-9-]+\.)?examplecorp\.(?:com|org|net)"
+    r"|(?:[a-z0-9-]+\.)?test\.(?:com|org|net)"
+    r"|internal\.wiki"
+    r"|internal\.example"
+    r"|localhost(?::\d+)?"
+    r"|127\.0\.0\.1(?::\d+)?"
+    r")(?:[/?#]|$)",
+    re.IGNORECASE,
+)
+
 
 def _handle_is_placeholder(handle_text: str) -> bool:
     """True if @Alice / @bob / etc — a placeholder name the prompts encourage."""
@@ -65,6 +84,12 @@ def _email_is_fictional(email_text: str) -> bool:
     """True if the email is on an obviously-fictional domain
     (example.com, examplecorp.com, test.com, etc.)."""
     return bool(_FICTIONAL_EMAIL_DOMAIN_RE.search(email_text))
+
+
+def _url_is_fictional(url_text: str) -> bool:
+    """True if the URL's host is a placeholder/fictional domain — the
+    descriptor LLM uses these to sanitize real URLs in exemplars."""
+    return bool(_FICTIONAL_URL_HOST_RE.match(url_text))
 
 # Words that may be sentence-initial-capitalized but are common English and
 # should not count as proper-noun leakage. Lowercase entries match the
@@ -198,6 +223,8 @@ def check_no_email_url_handle(text: str, result: ScrubResult) -> None:
             continue
         result.add("identifier:email", m.group(0), "Email address detected")
     for m in _URL_RE.finditer(text):
+        if _url_is_fictional(m.group(0)):
+            continue
         result.add("identifier:url", m.group(0), "URL detected")
     for m in _HANDLE_RE.finditer(text):
         if _handle_is_placeholder(m.group(0)):
