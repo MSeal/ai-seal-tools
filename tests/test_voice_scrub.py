@@ -19,7 +19,8 @@ from scrub import (
 # ---------- Email / URL / handle / hash ----------
 
 def test_email_detected():
-    result = scrub("Contact carol@example.com for details.")
+    """Real-domain email (not fictional) should flag."""
+    result = scrub("Contact carol@confluent.io for details.")
     assert not result.passed
     assert any(f.rule == "identifier:email" for f in result.findings)
 
@@ -62,12 +63,13 @@ def test_clean_text_passes():
 # ---------- Verbatim n-gram overlap ----------
 
 def test_long_substring_overlap_rejected():
-    source = "The DTX team wishes to consume the event team's Kafka stream."
-    # Candidate contains a 6+ word substring from source
-    candidate = "Patterns where the DTX team wishes to consume the event team's stream."
+    """A 6+ word match with multiple specific identifiers should flag."""
+    source = "The DTX team consumes the Kafka stream via librdkafka and writes to a Druid metrics store."
+    candidate = "Recently the DTX team consumes the Kafka stream via librdkafka and writes downstream."
     result = scrub(candidate, source=source)
-    assert not result.passed
-    assert any(f.rule == "leak:ngram_overlap" for f in result.findings)
+    assert any(f.rule == "leak:ngram_overlap" for f in result.findings), (
+        f"Multi-specific-word overlap should flag; got {[(f.rule, f.snippet) for f in result.findings]}"
+    )
 
 
 def test_short_substring_overlap_allowed():
@@ -233,6 +235,93 @@ def test_common_english_words_not_flagged_as_proper_nouns():
         assert word not in snippets, f"{word!r} should be in common-English lexicon; got flags: {snippets}"
 
 
+def test_markdown_table_cells_not_flagged():
+    """Each cell after `| ` should be treated as sentence-initial."""
+    candidate = "| Option | Risk | Headcount | Deliverable |\n| No new hire | Delayed launch | Internal prototype |"
+    result = scrub(candidate)
+    snippets = {f.snippet for f in result.findings if f.rule == "leak:proper_noun"}
+    for word in ["Option", "Risk", "Headcount", "Deliverable", "Delayed", "Internal"]:
+        assert word not in snippets, f"{word} (table cell) should not flag; got {snippets}"
+
+
+def test_bold_colon_followed_by_emphasis_then_word_not_flagged():
+    """`**Ask:** Approve` — the `:**` then space then capitalized word
+    should be recognized as sentence-initial."""
+    candidate = "**Ask:** Approve resourcing for the team."
+    result = scrub(candidate)
+    snippets = {f.snippet for f in result.findings if f.rule == "leak:proper_noun"}
+    assert "Approve" not in snippets, f"Approve after **:** should not flag; got {snippets}"
+
+
+def test_inline_bullet_separators_not_flagged():
+    """`Option X: + Enables ... + Builds trust - Exposes internal` —
+    mid-line +/- separators introduce new clauses."""
+    candidate = "Option X: + Enables contributions + Builds trust - Exposes internal routing"
+    result = scrub(candidate)
+    snippets = {f.snippet for f in result.findings if f.rule == "leak:proper_noun"}
+    for word in ["Enables", "Builds", "Exposes"]:
+        assert word not in snippets, f"{word} (inline-bullet) should not flag; got {snippets}"
+
+
+def test_quoted_sentence_inner_start_not_flagged():
+    """A quoted full sentence starts a new sentence-like context inside."""
+    candidate = "The maintainer clarified: 'Linking against this library does not require modification.'"
+    result = scrub(candidate)
+    snippets = {f.snippet for f in result.findings if f.rule == "leak:proper_noun"}
+    assert "Linking" not in snippets
+
+
+def test_placeholder_handles_not_flagged():
+    """`@Alice`, `@Bob` etc. are placeholders from the LLM prompt."""
+    candidate = "Reviewers: @Alice and @Bob agreed on the approach."
+    result = scrub(candidate)
+    handle_flags = [f.snippet for f in result.findings if f.rule == "identifier:handle"]
+    assert not handle_flags, f"Placeholder handles should not flag; got {handle_flags}"
+
+
+def test_real_handles_still_flagged():
+    """A non-placeholder @handle still gets flagged."""
+    candidate = "Reviewed by @rsanchez before commit."
+    result = scrub(candidate)
+    handle_flags = {f.snippet for f in result.findings if f.rule == "identifier:handle"}
+    assert "@rsanchez" in handle_flags
+
+
+def test_fictional_email_domains_not_flagged():
+    """Emails on example.com / examplecorp.com / test.com are doc-reserved
+    or obviously fictional — not real-identity leaks."""
+    for email in ["carol@examplecorp.com", "alice@example.com", "bob@test.org"]:
+        candidate = f"Contact {email} for details."
+        result = scrub(candidate)
+        email_flags = [f.snippet for f in result.findings if f.rule == "identifier:email"]
+        assert email not in email_flags, f"Fictional email {email} should not flag; got {email_flags}"
+
+
+def test_real_email_still_flagged():
+    candidate = "Contact alice@confluent.io for details."
+    result = scrub(candidate)
+    email_flags = {f.snippet for f in result.findings if f.rule == "identifier:email"}
+    assert "alice@confluent.io" in email_flags
+
+
+def test_handle_regex_doesnt_match_email_domain():
+    """`carol@examplecorp.com` should only fire the email check, not
+    duplicate-fire as `@examplecorp.com` handle."""
+    candidate = "carol@confluent.io"  # real email, not fictional
+    result = scrub(candidate)
+    rule_count = sum(1 for f in result.findings)
+    # Should be exactly one finding (email), not two (email + handle)
+    assert rule_count == 1, f"Expected single email flag, got {[(f.rule, f.snippet) for f in result.findings]}"
+
+
+def test_month_abbreviations_not_flagged():
+    for word in ["Mar", "Apr", "Sep", "Sept", "Dec"]:
+        candidate = f"The release is in {word} after the freeze ends."
+        result = scrub(candidate)
+        snippets = {f.snippet for f in result.findings if f.rule == "leak:proper_noun"}
+        assert word not in snippets, f"{word} (month abbrev) should not flag"
+
+
 def test_real_proper_nouns_still_flagged():
     """Lexicon-backed allowlist should NOT swallow real proper nouns —
     company names, product names, project names that aren't common English."""
@@ -255,13 +344,13 @@ def test_ngram_overlap_with_all_common_words_not_flagged():
 
 
 def test_ngram_overlap_with_specific_words_still_flagged():
-    """A 6+ word match containing identifying terms (project names, tech
+    """A 6+ word match containing ≥2 identifying terms (project names, tech
     names) IS a leak and should still flag."""
-    source = "The DevCharm proposal will deliver an interactive client experience for Kafka users."
-    candidate = "Recently we discussed how the DevCharm proposal will deliver an interactive client."
+    source = "DevCharm will replace the librdkafka backend with a Graalvm compiled binary for Python clients."
+    candidate = "We discussed how DevCharm will replace the librdkafka backend with a Graalvm option."
     result = scrub(candidate, source=source)
     ngram_flags = [f for f in result.findings if f.rule == "leak:ngram_overlap"]
-    assert ngram_flags, f"Source-specific overlap should flag; got no findings"
+    assert ngram_flags, f"Source-specific overlap should flag; got {[(f.rule, f.snippet) for f in result.findings]}"
 
 
 def test_status_markers_inside_brackets_still_flagged_ok():
@@ -308,11 +397,11 @@ def test_month_name_not_flagged():
 # ---------- ScrubResult mechanics ----------
 
 def test_multiple_findings_accumulated():
-    candidate = "Carol Example carol@example.com works at Confluent."
+    """Real-domain email + proper noun should both fire."""
+    candidate = "Carol carol@confluent.io works at Confluent."
     result = scrub(candidate)
     assert not result.passed
     rules = {f.rule for f in result.findings}
-    # Both email and proper noun should fire
     assert "identifier:email" in rules
     assert "leak:proper_noun" in rules
 

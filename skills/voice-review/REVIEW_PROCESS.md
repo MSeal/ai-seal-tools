@@ -100,7 +100,40 @@ Dedup is by hash — re-applying the same proposal is a no-op.
 queued → analyzed; source_hash + proposal_id linked). The reviewer doesn't
 touch the index — it consumes proposals and writes profile/sources_seen.
 
-## Modes
+## Two workflows
+
+There are two ways to walk through proposals — pick whichever feels right
+for the batch size:
+
+### File-based (recommended for batches of ≥5 proposals)
+
+Generates a single markdown file with every exemplar laid out. You edit
+`decision:` lines + add `reason:` for any overrides, then apply atomically.
+Much faster than the interactive prompt for large batches.
+
+```bash
+# Generate the review file from current pending proposals
+UV_NO_CONFIG=1 uv run skills/voice-review/regen_exemplar_review.py
+
+# Edit it: change `decision:` for any exemplar; add `reason:` for overrides
+$EDITOR scratch/voice-corpus/exemplar_review.md
+
+# Preview what would happen
+UV_NO_CONFIG=1 uv run skills/voice-review/apply_exemplar_review.py --dry-run
+
+# Apply: merges into profile, logs feedback, archives proposals
+UV_NO_CONFIG=1 uv run skills/voice-review/apply_exemplar_review.py
+```
+
+Sibling utilities (in `skills/voice-analyze/`):
+- `rescrub_proposals.py` — after updating `scrub.py` rules, re-evaluate
+  flag statuses on pending proposals without re-running propose-batch
+- `summarize_feedback.py` — analyze `scrub_feedback.yaml` (accumulated
+  user override reasons) to find rule-tuning candidates
+
+### Interactive (single proposals, careful reviews)
+
+Prompts per-piece. Better for inspecting one proposal in detail.
 
 ```bash
 # Show what's pending without prompting

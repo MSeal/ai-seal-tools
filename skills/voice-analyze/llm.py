@@ -32,6 +32,11 @@ from lexicons import VALID_AUDIENCES, VALID_DOC_TYPES
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_MAX_TOKENS = 4096
+# Per-call timeout in seconds. Without this the SDK can block indefinitely
+# when the underlying credential expires mid-run (the request hangs on the
+# socket waiting for a response that won't come). 120s covers normal
+# Sonnet response times with margin.
+DEFAULT_TIMEOUT = 120.0
 
 
 def _make_default_client():
@@ -329,6 +334,7 @@ class VoiceLLM:
                 }
             ],
             messages=[{"role": "user", "content": user_content}],
+            timeout=DEFAULT_TIMEOUT,
         )
         # First content block is the text response in standard mode
         return response.content[0].text

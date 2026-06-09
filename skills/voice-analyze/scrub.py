@@ -33,9 +33,38 @@ from lexicons import COMMON_ENGLISH  # noqa: E402
 
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _URL_RE = re.compile(r"\bhttps?://\S+\b", re.IGNORECASE)
-_HANDLE_RE = re.compile(r"@[A-Za-z][A-Za-z0-9_.-]{1,}")
+# Negative lookbehind for alphanumerics to avoid matching the domain part of
+# an email as if it were a handle (the existing _EMAIL_RE will catch the
+# email separately and unambiguously).
+_HANDLE_RE = re.compile(r"(?<![A-Za-z0-9])@[A-Za-z][A-Za-z0-9_.-]{1,}")
 _HEX_HASH_RE = re.compile(r"\b[a-f0-9]{32,}\b", re.IGNORECASE)
 _LONG_DIGIT_RE = re.compile(r"\b\d{5,}\b")
+
+# Handles that the LLM uses as placeholders (per our exemplar prompt) —
+# @Alice, @Bob, etc. — should not flag as identifier leaks.
+_PLACEHOLDER_HANDLE_NAMES: frozenset[str] = frozenset({
+    "alice", "bob", "carol", "dave", "eve", "frank",
+})
+
+# Domains documented for use in fictional content (RFC 2606 / RFC 6761
+# reserved + common fictional-corp patterns). Emails on these domains are
+# not real-identity leaks even if the local-part looks like a name.
+_FICTIONAL_EMAIL_DOMAIN_RE = re.compile(
+    r"@(?:example\.(?:com|org|net)|examplecorp\.(?:com|org|net)|test\.(?:com|org|net))$",
+    re.IGNORECASE,
+)
+
+
+def _handle_is_placeholder(handle_text: str) -> bool:
+    """True if @Alice / @bob / etc — a placeholder name the prompts encourage."""
+    name = handle_text.lstrip("@").lower()
+    return name in _PLACEHOLDER_HANDLE_NAMES
+
+
+def _email_is_fictional(email_text: str) -> bool:
+    """True if the email is on an obviously-fictional domain
+    (example.com, examplecorp.com, test.com, etc.)."""
+    return bool(_FICTIONAL_EMAIL_DOMAIN_RE.search(email_text))
 
 # Words that may be sentence-initial-capitalized but are common English and
 # should not count as proper-noun leakage. Lowercase entries match the
@@ -46,10 +75,13 @@ _PROPER_NOUN_ALLOWLIST: frozenset[str] = frozenset({
     "this", "these", "those", "that", "and", "but", "or", "if", "when",
     "where", "while", "because", "since", "as", "for", "in", "on", "of",
     "to", "with", "from", "by", "at", "into", "through", "during",
-    # Months / days
+    # Months / days (and common abbreviations)
     "january", "february", "march", "april", "may", "june", "july",
     "august", "september", "october", "november", "december",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept",
+    "oct", "nov", "dec",
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
     # Frequent placeholder-content words our exemplars may use
     "x", "y", "z", "a", "b", "c", "n", "m",
     # Placeholder NAMES the exemplar prompt explicitly tells the LLM to use.
@@ -162,10 +194,14 @@ def _ngrams(words: list[str], n: int) -> list[tuple[str, ...]]:
 
 def check_no_email_url_handle(text: str, result: ScrubResult) -> None:
     for m in _EMAIL_RE.finditer(text):
+        if _email_is_fictional(m.group(0)):
+            continue
         result.add("identifier:email", m.group(0), "Email address detected")
     for m in _URL_RE.finditer(text):
         result.add("identifier:url", m.group(0), "URL detected")
     for m in _HANDLE_RE.finditer(text):
+        if _handle_is_placeholder(m.group(0)):
+            continue
         result.add("identifier:handle", m.group(0), "@-handle detected")
     for m in _HEX_HASH_RE.finditer(text):
         result.add("identifier:hex_hash", m.group(0), "Hex hash detected")
@@ -250,20 +286,37 @@ def check_no_proper_nouns(
     # After newline + optional whitespace + optional bullet/list marker
     for m in re.finditer(r"\n\s*(?:[-*+•]|\d+[.)])?\s*", text):
         sentence_start_positions.add(m.end())
-    # After colon followed by whitespace (e.g. "Pattern: Description starts here")
-    # AND each subsequent comma-space within the colon-introduced list, up
-    # until the next sentence-terminator or newline. Captures patterns like
-    # "considerations include: Maintainability, Onboarding, Speed."
-    for m in re.finditer(r":\s+", text):
+    # After colon (with optional markdown-emphasis closer like `**`) plus
+    # whitespace — handles "Pattern: Description starts here" and the
+    # bold-colon case "**Ask:** Approve resourcing".
+    # Also: each subsequent comma-space within the colon-introduced list,
+    # up until the next sentence-terminator or newline.
+    for m in re.finditer(r":(?:[*_`]+)?\s+", text):
         list_start = m.end()
         sentence_start_positions.add(list_start)
         pos = list_start
-        # Find where this list ends (next .!? or newline)
         end_match = re.search(r"[.!?\n]", text[pos:])
         list_end = pos + end_match.start() if end_match else len(text)
-        # Treat each ", " between list_start and list_end as sentence-initial
         for cm in re.finditer(r",\s+", text[pos:list_end]):
             sentence_start_positions.add(pos + cm.end())
+
+    # After a markdown table cell separator `|`. Each cell starts a new
+    # sentence-like context, so words right after `| ` are sentence-initial.
+    for m in re.finditer(r"\|\s+", text):
+        sentence_start_positions.add(m.end())
+
+    # After a mid-line bullet/dash separator. LLM-generated content
+    # sometimes uses `+ Item + Item - Item` or `Option X: + Foo - Bar` on a
+    # single line as inline bullets. We require a whitespace or
+    # sentence-end before the marker so mid-word hyphens don't relax.
+    for m in re.finditer(r"(?:^|[\s:.!?])\s*[+\-•]\s+", text):
+        sentence_start_positions.add(m.end())
+
+    # After an opening quote (straight or smart). LLM frequently embeds
+    # a quoted full sentence: `clarified directly: 'Linking against this
+    # library does not require...'`. The quote opens a new sentence.
+    for m in re.finditer(r"['\"‘“]\s*", text):
+        sentence_start_positions.add(m.end())
 
     for m in _CAP_WORD_RE.finditer(text):
         word = m.group(1)
