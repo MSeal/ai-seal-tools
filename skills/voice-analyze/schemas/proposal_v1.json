@@ -33,6 +33,15 @@
       "type": "string",
       "enum": ["polished", "draft", "outline", "chat"]
     },
+    "source_type": {
+      "type": "string",
+      "enum": ["gmail", "slack", "confluence", "gdrive", "jira", "other"],
+      "description": "Medium / provenance of the analyzed text. Lets later consumers filter exemplars by medium."
+    },
+    "source_ref": {
+      "type": "string",
+      "description": "External identifier for the source — URL, email thread id, Slack thread URL, Confluence page id, etc. Opaque to the pipeline; for traceability only."
+    },
     "proposed_stats": {
       "type": "object",
       "description": "Output of the deterministic stats extractor. Validated against the profile-v1 stats sub-schema by the reviewer."

@@ -380,3 +380,28 @@ def test_update_sources_seen_dedup_by_hash():
     seen = update_sources_seen(seen, proposal, audience="technical_peer", doc_type="polished",
                                contributed_exemplar_ids=[])
     assert len(seen["sources"]) == 1
+
+
+def test_update_sources_seen_carries_provenance():
+    """source_type and source_ref on the proposal propagate to the
+    source_record so later consumers can filter by medium."""
+    seen = {"schema_version": 1, "sources": []}
+    proposal = make_proposal(source_type="gmail",
+                             source_ref="https://mail.google.com/mail/u/#inbox/abc123")
+    updated = update_sources_seen(seen, proposal, audience="external_public",
+                                  doc_type="chat", contributed_exemplar_ids=[])
+    record = updated["sources"][0]
+    assert record["source_type"] == "gmail"
+    assert record["source_ref"] == "https://mail.google.com/mail/u/#inbox/abc123"
+
+
+def test_update_sources_seen_omits_provenance_when_absent():
+    """A proposal without provenance produces a source_record without
+    those fields (backward-compat with pre-provenance proposals)."""
+    seen = {"schema_version": 1, "sources": []}
+    proposal = make_proposal()
+    updated = update_sources_seen(seen, proposal, audience="technical_peer",
+                                  doc_type="polished", contributed_exemplar_ids=[])
+    record = updated["sources"][0]
+    assert "source_type" not in record
+    assert "source_ref" not in record

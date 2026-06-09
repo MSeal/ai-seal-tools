@@ -69,6 +69,12 @@ class Proposal:
     notes: str = ""
     override_audience: str | None = None
     override_doc_type: str | None = None
+    # Provenance — what kind of source this came from (gmail/slack/confluence/
+    # gdrive/other) and an optional external identifier (URL, thread id, page
+    # id). Lets later consumers filter exemplars by medium and trace back to
+    # the original artifact without re-storing any of its content.
+    source_type: str | None = None
+    source_ref: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -90,6 +96,10 @@ class Proposal:
             out["override_audience"] = self.override_audience
         if self.override_doc_type is not None:
             out["override_doc_type"] = self.override_doc_type
+        if self.source_type is not None:
+            out["source_type"] = self.source_type
+        if self.source_ref is not None:
+            out["source_ref"] = self.source_ref
         return out
 
 

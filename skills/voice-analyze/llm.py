@@ -94,11 +94,11 @@ Make your best inference based on the metadata. Be honest about confidence — t
    - casual: DMs to friends, family, non-work social messages (work-channel Slack is NOT casual — those go under the audience of the people in the channel with doc_type=chat)
    - self_notes: Journals, todos, personal scratchpads
 
-2. The **doc_type**:
-   - polished: complete prose intended as a finished artifact (most Confluence pages)
-   - draft: in-progress prose, often in personal space or marked [WIP]
+2. The **doc_type** — describes the WRITING STATE, not the medium:
+   - polished: complete prose intended as a finished artifact. Includes most Confluence pages AND any communication that was sent / shipped (emails, published posts) — once a message is sent it counts as finished, even if it's only a few paragraphs.
+   - draft: in-progress prose, often in personal space or marked [WIP]. Reserved for content that was NOT sent / shipped — scratchpads, drafts saved for later, working copies.
    - outline: bullets / fragments — outline → expand-later (talk outlines, scratchpads, "draft outline" titles)
-   - chat: short channel/IM-style messages or thread participation — conversational, opinionated, fragmented punctuation, no expectation of polish
+   - chat: short channel/IM-style messages or thread participation — conversational, opinionated, fragmented punctuation, no expectation of polish. Includes short sent emails when the register is conversational rather than substantive prose.
 
 3. **axis_estimates** (0-1 scales): formality, technical_density, brevity, warmth.
 
@@ -142,11 +142,11 @@ CLASSIFY_SYSTEM = """You are a stylometric classifier. Given a writing sample, i
    - casual: DMs to friends, family, non-work social messages (NOT work-channel Slack — those use the audience of the people in the channel with doc_type=chat)
    - self_notes: Journals, todos, scratch — unfiltered private voice
 
-2. The **doc_type**:
-   - polished: complete prose intended as a finished artifact
-   - draft: in-progress prose with placeholders or rough edges
+2. The **doc_type** — describes the WRITING STATE, not the medium:
+   - polished: complete prose intended as a finished artifact. Sent/shipped communications (emails, published posts) count as polished even if relatively short — once shipped, it's finished.
+   - draft: in-progress prose with placeholders or rough edges. Only for content that was NOT sent/shipped — scratchpads, working copies, drafts saved for later.
    - outline: mostly bullets / short fragments / structure-first not prose-first
-   - chat: short channel/IM-style messages or thread participation — conversational, opinionated, fragmented punctuation
+   - chat: short channel/IM-style messages or thread participation — conversational, opinionated, fragmented punctuation. Includes short sent emails when the register is conversational rather than substantive prose.
 
 3. **axis_estimates** — the document's position on four 0-1 scales:
    - formality: 0=very casual, 1=very formal

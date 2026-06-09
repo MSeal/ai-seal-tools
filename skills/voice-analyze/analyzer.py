@@ -224,6 +224,8 @@ def run_propose(
     llm: VoiceLLM,
     override_audience: str | None = None,
     override_doc_type: str | None = None,
+    source_type: str | None = None,
+    source_ref: str | None = None,
 ) -> Proposal:
     """Build a Proposal from a document. Pure orchestration — no filesystem.
 
@@ -256,6 +258,8 @@ def run_propose(
         scrub_findings=[],  # descriptor-level leaks would have raised; exemplar findings live on each exemplar
         override_audience=override_audience,
         override_doc_type=override_doc_type,
+        source_type=source_type,
+        source_ref=source_ref,
     )
     return proposal
 
@@ -281,6 +285,8 @@ def cmd_propose(args: argparse.Namespace) -> int:
             llm=llm,
             override_audience=args.audience,
             override_doc_type=args.doc_type,
+            source_type=args.source_type,
+            source_ref=args.source_ref,
         )
     except DescriptorLeak as leak:
         print(
@@ -615,6 +621,10 @@ def main() -> int:
     p_propose.add_argument("path", help="Path to the document to analyze")
     p_propose.add_argument("--audience", help=f"Override classifier; one of {sorted(VALID_AUDIENCES)}")
     p_propose.add_argument("--doc-type", help=f"Override classifier; one of {sorted(VALID_DOC_TYPES)}")
+    p_propose.add_argument("--source-type",
+                           help="Provenance tag (gmail, slack, confluence, gdrive, other). Stored on the proposal + sources_seen record for later filtering by medium.")
+    p_propose.add_argument("--source-ref",
+                           help="External identifier for the source: URL, email thread id, Slack thread URL, Confluence page id, etc. Stored as opaque string for traceability.")
     p_propose.add_argument("--proposals-dir", help="Override the proposals output directory")
     p_propose.set_defaults(func=cmd_propose)
 

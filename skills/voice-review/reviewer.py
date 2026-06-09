@@ -364,6 +364,12 @@ def update_sources_seen(
         "word_count": proposal.get("source_word_count", 0),
         "axis_estimates": proposal["classification"]["axis_estimates"],
     }
+    # Carry provenance fields from the proposal into the long-term source
+    # record so later consumers can filter exemplars by medium / trace back.
+    if proposal.get("source_type"):
+        record["source_type"] = proposal["source_type"]
+    if proposal.get("source_ref"):
+        record["source_ref"] = proposal["source_ref"]
     if contributed_exemplar_ids:
         record["contributed_exemplar_ids"] = list(contributed_exemplar_ids)
     sources.append(record)

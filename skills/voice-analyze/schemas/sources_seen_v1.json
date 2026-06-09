@@ -36,6 +36,15 @@
         "doc_type": { "enum": ["polished", "draft", "outline", "chat"] },
         "word_count": { "type": "integer", "minimum": 0 },
         "axis_estimates": { "$ref": "#/$defs/axis_values" },
+        "source_type": {
+          "type": "string",
+          "enum": ["gmail", "slack", "confluence", "gdrive", "jira", "other"],
+          "description": "Medium / provenance of the analyzed text."
+        },
+        "source_ref": {
+          "type": "string",
+          "description": "External identifier for the source — URL, email thread id, Slack thread URL, Confluence page id, etc. Stored for traceability; opaque to the pipeline."
+        },
         "contributed_exemplar_ids": {
           "type": "array",
           "items": { "type": "string", "pattern": "^ex_[a-z0-9_]+$" }

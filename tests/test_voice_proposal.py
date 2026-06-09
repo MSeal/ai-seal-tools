@@ -348,6 +348,45 @@ def test_run_propose_records_overrides(nlp):
     assert proposal.classification.audience == "technical_peer"
 
 
+def test_run_propose_records_source_provenance(nlp):
+    """source_type and source_ref pass through run_propose into the
+    Proposal dataclass and serialize to the yaml form."""
+    from lexicons import Lexicons
+    llm = make_fake_llm()
+    proposal = run_propose(
+        text="A test document.",
+        nlp=nlp,
+        lexicons=Lexicons(),
+        llm=llm,
+        source_type="gmail",
+        source_ref="https://mail.google.com/mail/u/#inbox/abc123",
+    )
+    assert proposal.source_type == "gmail"
+    assert proposal.source_ref == "https://mail.google.com/mail/u/#inbox/abc123"
+    serialized = proposal.as_dict()
+    assert serialized["source_type"] == "gmail"
+    assert serialized["source_ref"] == "https://mail.google.com/mail/u/#inbox/abc123"
+
+
+def test_run_propose_omits_provenance_when_not_set(nlp):
+    """Provenance is optional — if caller doesn't pass it, those fields
+    don't appear in the serialized proposal (so the schema stays clean
+    for older Confluence/gdrive paths that haven't been updated yet)."""
+    from lexicons import Lexicons
+    llm = make_fake_llm()
+    proposal = run_propose(
+        text="A test document.",
+        nlp=nlp,
+        lexicons=Lexicons(),
+        llm=llm,
+    )
+    assert proposal.source_type is None
+    assert proposal.source_ref is None
+    serialized = proposal.as_dict()
+    assert "source_type" not in serialized
+    assert "source_ref" not in serialized
+
+
 def test_run_propose_use_when_phrasing_not_flagged(nlp):
     """Regression: each exemplar field gets scrubbed independently so that
     'Use when...' at the start of when_to_use is recognized as sentence-initial
