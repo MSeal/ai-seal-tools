@@ -37,6 +37,7 @@ from reviewer import (  # noqa: E402
     ARCHIVE_DIR,
     PROPOSALS_DIR,
 )
+from substituter import substitute_exemplar  # noqa: E402
 
 REVIEW_FILE = REPO_ROOT / "scratch" / "voice-corpus" / "exemplar_review.md"
 FEEDBACK_PATH = Path.home() / ".config" / "ai-seal-tools" / "voice" / "scrub_feedback.yaml"
@@ -75,6 +76,7 @@ def parse_review_file(path: Path) -> dict[str, dict[str, dict[str, str]]]:
             decision_m = re.search(r"^- decision:\s*([^\s#]\S*)", ex_body, re.MULTILINE)
             reason_m = re.search(r"^- reason:\s*([^\s#]\S*)", ex_body, re.MULTILINE)
             notes_m = re.search(r"^- reason_notes:\s*([^\s#].*?)(?:\s*#|$)", ex_body, re.MULTILINE)
+            sub_m = re.search(r"^- substitute:\s*([^\s#]\S*)", ex_body, re.MULTILINE)
             if not decision_m:
                 continue
             entry = {"decision": decision_m.group(1).strip().lower()}
@@ -82,6 +84,8 @@ def parse_review_file(path: Path) -> dict[str, dict[str, dict[str, str]]]:
                 entry["reason"] = reason_m.group(1).strip()
             if notes_m:
                 entry["reason_notes"] = notes_m.group(1).strip()
+            if sub_m:
+                entry["substitute"] = sub_m.group(1).strip().lower()
             exemplars[ex_id] = entry
         out[proposal_name] = exemplars
     return out
@@ -199,11 +203,13 @@ def main() -> int:
         ex_decisions = decisions_by_prop[prop_name]
         accepted_ids: set[str] = set()
         ex_notes: dict[str, str] = {}
+        substitutions_applied: dict[str, dict] = {}
         for ex in d.get("candidate_exemplars", []):
             entry = ex_decisions.get(ex["id"], {"decision": "reject"})
             decision = entry.get("decision", "reject")
             reason = entry.get("reason")
             reason_notes = entry.get("reason_notes")
+            substitute = entry.get("substitute", "")
 
             if reason and reason not in VALID_REASONS:
                 invalid_reasons.append((ex["id"], reason))
@@ -211,12 +217,31 @@ def main() -> int:
 
             if decision == "accept":
                 accepted_ids.add(ex["id"])
+                # If substitute=auto, rewrite the exemplar's text fields
+                # to swap flagged names for placeholders and specific
+                # numbers for generic markers. The substituted version
+                # (not the original) goes into the profile.
+                if substitute == "auto" and ex.get("scrub_status") == "flagged":
+                    new_ex, mapping = substitute_exemplar(ex)
+                    if mapping:
+                        substitutions_applied[ex["id"]] = mapping
+                        # Update in-memory ex so the merger sees substituted content
+                        ex["synthetic"] = new_ex["synthetic"]
+                        ex["pattern"] = new_ex["pattern"]
+                        ex["when_to_use"] = new_ex["when_to_use"]
                 if ex.get("scrub_status") == "flagged":
                     note_parts = ["accepted despite scrub flag"]
                     if reason:
                         note_parts.append(f"reason: {reason}")
                     if reason_notes:
                         note_parts.append(f"notes: {reason_notes}")
+                    if substitute == "auto":
+                        sub_summary = substitutions_applied.get(ex["id"], {})
+                        if sub_summary:
+                            sub_str = ", ".join(f"{k}→{v}" for k, v in sub_summary.items())
+                            note_parts.append(f"substituted: {sub_str}")
+                        else:
+                            note_parts.append("substituted: (numbers only)")
                     ex_notes[ex["id"]] = "; ".join(note_parts)
 
             # Log feedback for any flagged exemplar (accept or reject, with or

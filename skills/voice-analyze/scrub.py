@@ -307,9 +307,11 @@ def check_no_proper_nouns(
 
     # After a mid-line bullet/dash separator. LLM-generated content
     # sometimes uses `+ Item + Item - Item` or `Option X: + Foo - Bar` on a
-    # single line as inline bullets. We require a whitespace or
-    # sentence-end before the marker so mid-word hyphens don't relax.
-    for m in re.finditer(r"(?:^|[\s:.!?])\s*[+\-•]\s+", text):
+    # single line as inline bullets. Also includes `·` (U+00B7 middle dot)
+    # which the LLM emits frequently for short bullet lists. We require a
+    # whitespace or sentence-end before the marker so mid-word hyphens
+    # don't relax.
+    for m in re.finditer(r"(?:^|[\s:.!?])\s*[+\-•·]\s+", text):
         sentence_start_positions.add(m.end())
 
     # After an opening quote (straight or smart). LLM frequently embeds
@@ -345,12 +347,12 @@ def check_no_proper_nouns(
 
 # Characters that can appear between a known sentence-start and the actual
 # CapWord. Markdown emphasis (`**`, `*`, `_`, `` ` ``), header markers (`#`),
-# bullet markers (`-`, `+`, `•`, `>`), and whitespace.
+# bullet markers (`-`, `+`, `•`, `·`, `>`), and whitespace.
 # These are safe to skip during walk-back: they're structural prefixes, not
 # content. Note: `-` is included because bullet lists use it, and hyphenated
 # words have a letter (not `-`) immediately before their second capital, so
 # this doesn't create false negatives for "Mid-Caps"-style words.
-_EMPHASIS_CHARS = set("*_`#-+•> \t")
+_EMPHASIS_CHARS = set("*_`#-+•·> \t")
 
 
 def _is_sentence_initial(match_start: int, text: str, sentence_starts: set[int]) -> bool:

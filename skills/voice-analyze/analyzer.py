@@ -497,10 +497,11 @@ def cmd_propose_batch(args: argparse.Namespace) -> int:
     targets = [s for s in index["sources"] if s.get("status") == "queued"]
     if args.audience:
         targets = [s for s in targets if s.get("proposed_audience") == args.audience]
-    if args.limit:
-        targets = targets[: int(args.limit)]
 
-    # Filter to entries with available content
+    # Filter to entries with available content. Apply --limit AFTER content
+    # filtering so the cap is on actually-processable docs, not raw queue
+    # position. Otherwise --limit 5 might leave you with 0 fetchable if the
+    # first 5 queued entries are all uncached.
     fetchable: list[tuple[dict[str, Any], str]] = []  # (entry, text)
     skipped_no_content: list[dict[str, Any]] = []
     for entry in targets:
@@ -509,6 +510,8 @@ def cmd_propose_batch(args: argparse.Namespace) -> int:
             fetchable.append((entry, fc.text))
         except FetchUnavailable as e:
             skipped_no_content.append(entry)
+    if args.limit:
+        fetchable = fetchable[: int(args.limit)]
 
     print(f"Queued targets: {len(targets)}")
     print(f"  with content: {len(fetchable)}")

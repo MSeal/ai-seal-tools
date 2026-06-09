@@ -263,6 +263,17 @@ def test_inline_bullet_separators_not_flagged():
         assert word not in snippets, f"{word} (inline-bullet) should not flag; got {snippets}"
 
 
+def test_middle_dot_bullets_not_flagged():
+    """The LLM frequently emits `·` (U+00B7 middle dot) as a bullet marker
+    in compact single-line lists: `[P0] · Validate auth · Confirm latency
+    · Finalize error taxonomy`. Each `· ` should be sentence-initial."""
+    candidate = "Critical Path Items [P0] · Validate auth handshake · Confirm latency budget · Finalize error taxonomy"
+    result = scrub(candidate)
+    snippets = {f.snippet for f in result.findings if f.rule == "leak:proper_noun"}
+    for word in ["Validate", "Confirm", "Finalize"]:
+        assert word not in snippets, f"{word} (· bullet) should not flag; got {snippets}"
+
+
 def test_quoted_sentence_inner_start_not_flagged():
     """A quoted full sentence starts a new sentence-like context inside."""
     candidate = "The maintainer clarified: 'Linking against this library does not require modification.'"
