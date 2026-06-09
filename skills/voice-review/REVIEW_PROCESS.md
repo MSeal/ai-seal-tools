@@ -131,6 +131,51 @@ Sibling utilities (in `skills/voice-analyze/`):
 - `summarize_feedback.py` — analyze `scrub_feedback.yaml` (accumulated
   user override reasons) to find rule-tuning candidates
 
+#### Fast-path: auto-categorize before hand review
+
+When most of the rejects in a batch are scrub false positives (common
+nouns in section labels), running `auto_categorize.py` over the review
+file flips them to `accept` with sensible default reasons, so hand
+review only touches the genuinely ambiguous cases.
+
+```bash
+# After regen_exemplar_review.py, before opening $EDITOR:
+UV_NO_CONFIG=1 uv run skills/voice-review/auto_categorize.py
+```
+
+Heuristic per flagged reject:
+- Any proper-noun flag adjacent to a placeholder first name OR after
+  an explicit people-context marker (`Attendees:`, `By:`, `@`) →
+  `accept` + `substitute: auto` (substituter rewrites on merge).
+- All flags are common nouns in section/title positions →
+  `accept` + `reason: false_positive:section_label`.
+- Anything else (ngram-overlap flags etc.) → left as `reject` for
+  reviewer judgment.
+
+#### Fixing mistakes after merge
+
+`profile_edit.py` makes targeted corrections to the live profile when
+the normal review-and-merge path produced something you want to retract
+or add back. Every operation appends to `merge_history` so the audit
+trail stays intact.
+
+```bash
+# Remove already-merged exemplars by id
+UV_NO_CONFIG=1 uv run skills/voice-review/profile_edit.py remove ex_xxx_001 ex_xxx_002
+
+# Restore an exemplar that was previously rejected (pulls from archive)
+UV_NO_CONFIG=1 uv run skills/voice-review/profile_edit.py restore ex_yyy_003 \
+    --reason true_positive:override --notes "useful pattern, accepting the leak"
+
+# Restore with auto-substitution (placeholder names, <N> for multi-digit numbers)
+UV_NO_CONFIG=1 uv run skills/voice-review/profile_edit.py restore ex_zzz_007 \
+    --reason false_positive:common_word --substitute
+
+# Replace reviewer_notes on an exemplar that's already in the profile
+UV_NO_CONFIG=1 uv run skills/voice-review/profile_edit.py update-notes ex_aaa_004 \
+    --reason false_positive:emphasis --notes "bold styling, not a name"
+```
+
 ### Interactive (single proposals, careful reviews)
 
 Prompts per-piece. Better for inspecting one proposal in detail.
