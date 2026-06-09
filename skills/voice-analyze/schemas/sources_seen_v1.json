@@ -33,7 +33,7 @@
           "type": "string",
           "description": "Audience tag. Must be a key in the profile's audience_registry (cross-file check at write time)."
         },
-        "doc_type": { "enum": ["polished", "draft", "outline"] },
+        "doc_type": { "enum": ["polished", "draft", "outline", "chat"] },
         "word_count": { "type": "integer", "minimum": 0 },
         "axis_estimates": { "$ref": "#/$defs/axis_values" },
         "contributed_exemplar_ids": {

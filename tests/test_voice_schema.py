@@ -103,7 +103,7 @@ def test_invalid_doc_type_fails():
         voice_schema.validate("profile", data)
 
 
-@pytest.mark.parametrize("doc_type", ["polished", "draft", "outline"])
+@pytest.mark.parametrize("doc_type", ["polished", "draft", "outline", "chat"])
 def test_all_doc_types_accepted(doc_type):
     data = _load_yaml(TEMPLATES / "profile.yaml")
     data["audiences"]["technical_peer"] = {

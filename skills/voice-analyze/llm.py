@@ -91,13 +91,14 @@ Make your best inference based on the metadata. Be honest about confidence — t
    - direct_report: 1:1 prep, feedback, coaching messages
    - cross_functional: Specs, primers, partnership asks, persona docs aimed at PM/design/non-engineering partners
    - external_public: Blog posts, talk abstracts, conference outlines, public READMEs, PR/FAQ templates
-   - casual: DMs to friends, casual Slack, social messages
+   - casual: DMs to friends, family, non-work social messages (work-channel Slack is NOT casual — those go under the audience of the people in the channel with doc_type=chat)
    - self_notes: Journals, todos, personal scratchpads
 
 2. The **doc_type**:
    - polished: complete prose intended as a finished artifact (most Confluence pages)
    - draft: in-progress prose, often in personal space or marked [WIP]
    - outline: bullets / fragments — outline → expand-later (talk outlines, scratchpads, "draft outline" titles)
+   - chat: short channel/IM-style messages or thread participation — conversational, opinionated, fragmented punctuation, no expectation of polish
 
 3. **axis_estimates** (0-1 scales): formality, technical_density, brevity, warmth.
 
@@ -117,7 +118,7 @@ Output JSON only — no prose around it, no markdown fences. Schema:
   "audience": "<one of the seven tags>",
   "audience_confidence": <0-1>,
   "audience_alternates": [<list of plausible alternates>],
-  "doc_type": "polished" | "draft" | "outline",
+  "doc_type": "polished" | "draft" | "outline" | "chat",
   "doc_type_confidence": <0-1>,
   "axis_estimates": {
     "formality": <0-1>,
@@ -133,18 +134,19 @@ Output JSON only — no prose around it, no markdown fences. Schema:
 CLASSIFY_SYSTEM = """You are a stylometric classifier. Given a writing sample, identify:
 
 1. The intended **audience** — pick ONE tag from this fixed set:
-   - technical_peer: Design docs, RFCs, technical messages to engineering peers
+   - technical_peer: Design docs, RFCs, technical messages to engineering peers. Includes work-channel Slack with eng peers.
    - leadership: Status updates, project pitches, escalations to managers/execs
    - direct_report: 1:1 prep, feedback, coaching messages to direct reports
-   - cross_functional: Specs, explainers for PM/design/non-engineering partners
+   - cross_functional: Specs, explainers for PM/design/non-engineering partners. Includes work-channel Slack with PMs/designers.
    - external_public: Blog posts, talk abstracts, public READMEs
-   - casual: DMs to friends, casual Slack, social messages
+   - casual: DMs to friends, family, non-work social messages (NOT work-channel Slack — those use the audience of the people in the channel with doc_type=chat)
    - self_notes: Journals, todos, scratch — unfiltered private voice
 
 2. The **doc_type**:
    - polished: complete prose intended as a finished artifact
    - draft: in-progress prose with placeholders or rough edges
    - outline: mostly bullets / short fragments / structure-first not prose-first
+   - chat: short channel/IM-style messages or thread participation — conversational, opinionated, fragmented punctuation
 
 3. **axis_estimates** — the document's position on four 0-1 scales:
    - formality: 0=very casual, 1=very formal
@@ -161,7 +163,7 @@ Output JSON only — no prose around it, no markdown fences. Schema:
   "audience": "<one of the seven tags>",
   "audience_confidence": <0-1>,
   "audience_alternates": [<list of plausible alternates, possibly empty>],
-  "doc_type": "polished" | "draft" | "outline",
+  "doc_type": "polished" | "draft" | "outline" | "chat",
   "doc_type_confidence": <0-1>,
   "axis_estimates": {
     "formality": <0-1>,

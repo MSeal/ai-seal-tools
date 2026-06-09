@@ -49,7 +49,7 @@
         "types": {
           "type": "object",
           "description": "Per-doc-type sub-profile. Keys must be from the doc_type enum.",
-          "propertyNames": { "enum": ["polished", "draft", "outline"] },
+          "propertyNames": { "enum": ["polished", "draft", "outline", "chat"] },
           "additionalProperties": { "$ref": "#/$defs/type_bucket" }
         }
       }

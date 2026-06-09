@@ -65,7 +65,7 @@ VALID_AUDIENCES: frozenset[str] = frozenset({
     "self_notes",
 })
 
-VALID_DOC_TYPES: frozenset[str] = frozenset({"polished", "draft", "outline"})
+VALID_DOC_TYPES: frozenset[str] = frozenset({"polished", "draft", "outline", "chat"})
 
 
 # ---------- Inline lexicons ----------------------------------------------------

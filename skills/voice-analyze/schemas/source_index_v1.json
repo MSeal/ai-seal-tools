@@ -85,7 +85,7 @@
           "items": { "type": "string" },
           "description": "Other plausible audience tags, from classifier or heuristic ambiguity."
         },
-        "proposed_doc_type": { "enum": ["polished", "draft", "outline"] },
+        "proposed_doc_type": { "enum": ["polished", "draft", "outline", "chat"] },
         "doc_type_source": { "enum": ["heuristic", "classifier", "manual"] },
         "doc_type_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "status": {

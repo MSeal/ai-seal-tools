@@ -58,7 +58,7 @@ def test_classify_system_lists_all_seven_audiences():
 
 
 def test_classify_system_lists_all_doc_types():
-    for dt in ["polished", "draft", "outline"]:
+    for dt in ["polished", "draft", "outline", "chat"]:
         assert dt in CLASSIFY_SYSTEM
 
 
