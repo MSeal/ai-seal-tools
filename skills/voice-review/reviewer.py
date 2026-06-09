@@ -370,6 +370,9 @@ def update_sources_seen(
         record["source_type"] = proposal["source_type"]
     if proposal.get("source_ref"):
         record["source_ref"] = proposal["source_ref"]
+    # Authorship: only stamp 'partial' (full is the implicit default).
+    if proposal.get("authorship") == "partial":
+        record["authorship"] = "partial"
     if contributed_exemplar_ids:
         record["contributed_exemplar_ids"] = list(contributed_exemplar_ids)
     sources.append(record)

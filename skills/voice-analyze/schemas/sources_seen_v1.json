@@ -38,12 +38,17 @@
         "axis_estimates": { "$ref": "#/$defs/axis_values" },
         "source_type": {
           "type": "string",
-          "enum": ["gmail", "slack", "confluence", "gdrive", "jira", "other"],
+          "enum": ["gmail", "slack", "wiki", "gdrive", "jira", "other"],
           "description": "Medium / provenance of the analyzed text."
         },
         "source_ref": {
           "type": "string",
           "description": "External identifier for the source — URL, email thread id, Slack thread URL, Confluence page id, etc. Stored for traceability; opaque to the pipeline."
+        },
+        "authorship": {
+          "type": "string",
+          "enum": ["full", "partial"],
+          "description": "Default 'full' (omitted). 'partial' marks sources where only some of the content is the user's; contributed_exemplar_ids may still be populated but stats/descriptors weren't merged in."
         },
         "contributed_exemplar_ids": {
           "type": "array",

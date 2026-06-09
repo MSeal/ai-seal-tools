@@ -260,13 +260,19 @@ def main() -> int:
         total_accepted_ex += len(accepted_ids)
         total_rejected_ex += len(d.get("candidate_exemplars", [])) - len(accepted_ids)
 
-        # Auto-accept stats + all descriptor fields
+        # Partial-authorship sources skip stats + descriptor merges —
+        # the aggregates would mix in co-author voice. Exemplars still
+        # land normally because the reviewer accepts each individually.
+        is_partial = d.get("authorship") == "partial"
         decisions = {
             "audience": audience,
             "doc_type": doc_type,
-            "merge_stats": True,
-            "merge_descriptors": True,
-            "accepted_descriptor_fields": set((d.get("proposed_descriptors") or {}).keys()),
+            "merge_stats": not is_partial,
+            "merge_descriptors": not is_partial,
+            "accepted_descriptor_fields": (
+                set() if is_partial
+                else set((d.get("proposed_descriptors") or {}).keys())
+            ),
             "accepted_exemplar_ids": accepted_ids,
             "exemplar_notes": ex_notes,
         }

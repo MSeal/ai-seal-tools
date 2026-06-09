@@ -75,6 +75,12 @@ class Proposal:
     # the original artifact without re-storing any of its content.
     source_type: str | None = None
     source_ref: str | None = None
+    # Authorship signal — "full" if the user wrote the entire source,
+    # "partial" if only some of it. Partial sources contribute only
+    # exemplars (which the reviewer accepts per-item); their stats and
+    # descriptors are skipped on merge because the aggregates would mix
+    # in other contributors' voice.
+    authorship: str = "full"
 
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -100,6 +106,10 @@ class Proposal:
             out["source_type"] = self.source_type
         if self.source_ref is not None:
             out["source_ref"] = self.source_ref
+        # Only serialize authorship when it's non-default ("partial") so
+        # the schema stays clean for the default case.
+        if self.authorship and self.authorship != "full":
+            out["authorship"] = self.authorship
         return out
 
 

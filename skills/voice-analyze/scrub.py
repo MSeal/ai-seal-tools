@@ -175,6 +175,14 @@ _PROPER_NOUN_ALLOWLIST: frozenset[str] = frozenset({
     "highlight", "highlights", "highlighting",
     "introduce", "introduces", "introducing",
     "pause", "pauses", "pausing",
+    # Hedge / qualifier adjectives the descriptor LLM uses to characterize
+    # writing style (mid-sentence, capitalized when sentence-initial in a
+    # bullet or list item). These are common English, not proper nouns.
+    "tentative", "cautious", "hesitant", "definitive", "conclusive",
+    "preliminary", "initial", "speculative", "exploratory", "pragmatic",
+    "decisive", "measured", "deliberate", "candid", "direct",
+    "ambivalent", "ambiguous", "uncertain", "confident", "assertive",
+    "factual", "analytical", "rhetorical", "didactic",
 })
 
 # Multi-letter, starts with uppercase, not entirely uppercase (allow acronyms via

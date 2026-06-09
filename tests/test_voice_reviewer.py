@@ -395,6 +395,28 @@ def test_update_sources_seen_carries_provenance():
     assert record["source_ref"] == "https://mail.google.com/mail/u/#inbox/abc123"
 
 
+def test_update_sources_seen_stamps_partial_authorship():
+    """A proposal with authorship=partial gets that stamped on the
+    source_record so later consumers know the source contributed only
+    exemplars, not stats/descriptors."""
+    seen = {"schema_version": 1, "sources": []}
+    proposal = make_proposal(authorship="partial")
+    updated = update_sources_seen(seen, proposal, audience="technical_peer",
+                                  doc_type="polished", contributed_exemplar_ids=[])
+    record = updated["sources"][0]
+    assert record["authorship"] == "partial"
+
+
+def test_update_sources_seen_omits_authorship_when_full():
+    """Full authorship (the default) is not serialized to keep records
+    minimal — absence implies 'full'."""
+    seen = {"schema_version": 1, "sources": []}
+    proposal = make_proposal()  # default = no authorship field
+    updated = update_sources_seen(seen, proposal, audience="technical_peer",
+                                  doc_type="polished", contributed_exemplar_ids=[])
+    assert "authorship" not in updated["sources"][0]
+
+
 def test_update_sources_seen_omits_provenance_when_absent():
     """A proposal without provenance produces a source_record without
     those fields (backward-compat with pre-provenance proposals)."""

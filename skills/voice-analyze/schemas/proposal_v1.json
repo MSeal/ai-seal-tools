@@ -35,12 +35,17 @@
     },
     "source_type": {
       "type": "string",
-      "enum": ["gmail", "slack", "confluence", "gdrive", "jira", "other"],
+      "enum": ["gmail", "slack", "wiki", "gdrive", "jira", "other"],
       "description": "Medium / provenance of the analyzed text. Lets later consumers filter exemplars by medium."
     },
     "source_ref": {
       "type": "string",
       "description": "External identifier for the source — URL, email thread id, Slack thread URL, Confluence page id, etc. Opaque to the pipeline; for traceability only."
+    },
+    "authorship": {
+      "type": "string",
+      "enum": ["full", "partial"],
+      "description": "Default 'full' (omitted). 'partial' marks sources where only some of the content is the user's — used by the reviewer to skip stats/descriptor merges since aggregates would dilute with co-author voice."
     },
     "proposed_stats": {
       "type": "object",

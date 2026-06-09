@@ -368,6 +368,25 @@ def test_run_propose_records_source_provenance(nlp):
     assert serialized["source_ref"] == "https://mail.google.com/mail/u/#inbox/abc123"
 
 
+def test_run_propose_partial_authorship_records(nlp):
+    """authorship=partial flows through and serializes; default 'full'
+    is omitted so the proposal yaml stays clean for the common case."""
+    from lexicons import Lexicons
+    llm = make_fake_llm()
+    p = run_propose(text="A test document.", nlp=nlp, lexicons=Lexicons(),
+                    llm=llm, authorship="partial")
+    assert p.authorship == "partial"
+    assert p.as_dict()["authorship"] == "partial"
+
+
+def test_run_propose_full_authorship_omitted_from_serialization(nlp):
+    from lexicons import Lexicons
+    llm = make_fake_llm()
+    p = run_propose(text="A test document.", nlp=nlp, lexicons=Lexicons(), llm=llm)
+    assert p.authorship == "full"
+    assert "authorship" not in p.as_dict()
+
+
 def test_run_propose_omits_provenance_when_not_set(nlp):
     """Provenance is optional — if caller doesn't pass it, those fields
     don't appear in the serialized proposal (so the schema stays clean

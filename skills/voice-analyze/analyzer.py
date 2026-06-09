@@ -226,6 +226,7 @@ def run_propose(
     override_doc_type: str | None = None,
     source_type: str | None = None,
     source_ref: str | None = None,
+    authorship: str = "full",
 ) -> Proposal:
     """Build a Proposal from a document. Pure orchestration — no filesystem.
 
@@ -260,6 +261,7 @@ def run_propose(
         override_doc_type=override_doc_type,
         source_type=source_type,
         source_ref=source_ref,
+        authorship=authorship,
     )
     return proposal
 
@@ -287,6 +289,7 @@ def cmd_propose(args: argparse.Namespace) -> int:
             override_doc_type=args.doc_type,
             source_type=args.source_type,
             source_ref=args.source_ref,
+            authorship=args.authorship,
         )
     except DescriptorLeak as leak:
         print(
@@ -625,6 +628,8 @@ def main() -> int:
                            help="Provenance tag (gmail, slack, confluence, gdrive, other). Stored on the proposal + sources_seen record for later filtering by medium.")
     p_propose.add_argument("--source-ref",
                            help="External identifier for the source: URL, email thread id, Slack thread URL, Confluence page id, etc. Stored as opaque string for traceability.")
+    p_propose.add_argument("--authorship", choices=["full", "partial"], default="full",
+                           help="`full` (default) if you wrote the entire source. `partial` if only some — partial sources only contribute exemplars (which the reviewer accepts per-item); their stats and descriptors are skipped because aggregates would mix in other contributors' voice.")
     p_propose.add_argument("--proposals-dir", help="Override the proposals output directory")
     p_propose.set_defaults(func=cmd_propose)
 
